@@ -1,14 +1,23 @@
-use std::{collections::{HashMap, HashSet}, time::Duration};
+use crate::state::AppState;
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
-use crate::state::AppState;
 
 /// Maintains mint-scoped logsSubscribe subscriptions on one provider socket.
-pub async fn run_connection(state: &AppState, endpoint: &str, provider: &'static str) -> Result<()> {
-    let (mut socket, _) = connect_async(endpoint).await.with_context(|| format!("{provider} WebSocket connection failed"))?;
+pub async fn run_connection(
+    state: &AppState,
+    endpoint: &str,
+    provider: &'static str,
+) -> Result<()> {
+    let (mut socket, _) = connect_async(endpoint)
+        .await
+        .with_context(|| format!("{provider} WebSocket connection failed"))?;
     info!(provider, "Solana provider WebSocket connected");
     let mut request_id = 1_u64;
     let mut pending = HashMap::<u64, String>::new();
