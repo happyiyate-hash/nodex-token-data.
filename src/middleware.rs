@@ -13,7 +13,10 @@ pub async fn require_api_key(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let supplied = request.headers().get("x-api-key").and_then(|value| value.to_str().ok());
+    let supplied = request
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok());
 
     if supplied.is_some_and(|value| value == state.api_key.as_str()) {
         next.run(request).await
