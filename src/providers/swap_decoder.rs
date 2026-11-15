@@ -263,16 +263,20 @@ fn expected_token_delta(event: &Swap) -> Option<i128> {
 
 fn token_balance_delta(tx: &Value, mint: &str, owner: &str) -> Option<i128> {
     fn total(tx: &Value, path: &str, mint: &str, owner: &str) -> Option<u128> {
+        // An absent balance row means the owner's token account was created or
+        // closed in this transaction. Treat that side as zero, but reject
+        // matching-mint rows without owner metadata because attribution is
+        // ambiguous.
         let rows = tx.pointer(path)?.as_array()?;
-        let mut found = false;
         let mut sum = 0_u128;
         for row in rows {
-            if row.get("mint").and_then(Value::as_str) != Some(mint)
-                || row.get("owner").and_then(Value::as_str) != Some(owner)
-            {
+            if row.get("mint").and_then(Value::as_str) != Some(mint) {
                 continue;
             }
-            found = true;
+            let row_owner = row.get("owner").and_then(Value::as_str)?;
+            if row_owner != owner {
+                continue;
+            }
             let amount = row
                 .pointer("/uiTokenAmount/amount")?
                 .as_str()?
@@ -280,7 +284,7 @@ fn token_balance_delta(tx: &Value, mint: &str, owner: &str) -> Option<i128> {
                 .ok()?;
             sum = sum.checked_add(amount)?;
         }
-        found.then_some(sum)
+        Some(sum)
     }
 
     let before = total(tx, "/meta/preTokenBalances", mint, owner)?;
@@ -445,6 +449,58 @@ mod tests {
         assert_eq!(events[0].base, 500);
         assert_eq!(events[1].base, 300);
         assert_ne!(events[0].event_index, events[1].event_index);
+    }
+
+    #[test]
+    fn accepts_new_token_account_as_zero_pre_balance() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [],
+            "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "700"}}]
+        }});
+        assert_eq!(token_balance_delta(&tx, &mint, &trader), Some(700));
+    }
+
+    #[test]
+    fn accepts_closed_token_account_as_zero_post_balance() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "700"}}],
+            "postTokenBalances": []
+        }});
+        assert_eq!(token_balance_delta(&tx, &mint, &trader), Some(-700));
+    }
+
+    #[test]
+    fn rejects_balance_attribution_when_matching_mint_owner_is_missing() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "uiTokenAmount": {"amount": "100"}}],
+            "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "600"}}]
+        }});
+        assert_eq!(token_balance_delta(&tx, &mint, &trader), None);
+    }
+
+    #[test]
+    fn aggregates_multiple_traders_independently() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader_a = bs58::encode([4; 32]).into_string();
+        let trader_b = bs58::encode([5; 32]).into_string();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [
+                {"mint": mint, "owner": trader_a, "uiTokenAmount": {"amount": "100"}},
+                {"mint": mint, "owner": trader_b, "uiTokenAmount": {"amount": "200"}}
+            ],
+            "postTokenBalances": [
+                {"mint": mint, "owner": trader_a, "uiTokenAmount": {"amount": "400"}},
+                {"mint": mint, "owner": trader_b, "uiTokenAmount": {"amount": "700"}}
+            ]
+        }});
+        assert_eq!(token_balance_delta(&tx, &mint, &trader_a), Some(300));
+        assert_eq!(token_balance_delta(&tx, &mint, &trader_b), Some(500));
     }
 
     #[test]
