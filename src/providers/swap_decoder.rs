@@ -200,9 +200,9 @@ fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
     // PumpSwap events do not carry the base mint. Attribute an event only when
     // its trader's confirmed token-balance delta exactly matches the event's
     // base amount. Ambiguous or incomplete balance metadata is rejected.
-    let mut matched = candidates
-        .into_iter()
-        .filter(|event| token_balance_delta(tx, mint, &event.trader) == expected_token_delta(event));
+    let mut matched = candidates.into_iter().filter(|event| {
+        token_balance_delta(tx, mint, &event.trader) == expected_token_delta(event)
+    });
     let event = matched.next()?;
     if matched.next().is_some() {
         return None;
@@ -231,7 +231,11 @@ fn token_balance_delta(tx: &Value, mint: &str, owner: &str) -> Option<i128> {
                 continue;
             }
             found = true;
-            let amount = row.pointer("/uiTokenAmount/amount")?.as_str()?.parse::<u128>().ok()?;
+            let amount = row
+                .pointer("/uiTokenAmount/amount")?
+                .as_str()?
+                .parse::<u128>()
+                .ok()?;
             sum = sum.checked_add(amount)?;
         }
         found.then_some(sum)
