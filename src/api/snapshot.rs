@@ -68,6 +68,17 @@ pub async fn get_snapshot(
             .unwrap_or_default(),
         None => Vec::new(),
     };
+    let recent_trades = match market_quote
+        .as_ref()
+        .and_then(|quote| quote.pair_address.as_deref())
+    {
+        Some(pool) => state
+            .market_client
+            .fetch_trades(pool)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
 
     let mut snapshot = TokenSnapshot::unavailable(mint.clone(), timeframe);
     snapshot.identity.name = chain_data.name.clone();
@@ -101,6 +112,10 @@ pub async fn get_snapshot(
     snapshot.chart.points = chart_points;
     if !snapshot.chart.points.is_empty() {
         snapshot.data_status.chart = "available";
+    }
+    snapshot.trades.recent = recent_trades;
+    if !snapshot.trades.recent.is_empty() {
+        snapshot.data_status.trades = "available";
     }
 
     snapshot.data_status.identity =
