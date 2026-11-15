@@ -12,10 +12,12 @@ mod ws;
 
 use anyhow::Result;
 use axum::{
+    http::{header, HeaderName, Method},
     middleware::from_fn_with_state,
     routing::{get, post},
     Router,
 };
+use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -62,7 +64,13 @@ async fn main() -> Result<()> {
         // The WebSocket uses a short-lived, single-use ticket.
         .route("/ws/tokens", get(ws::connect))
         .merge(protected)
-        .with_state(state);
+        .with_state(state)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, HeaderName::from_static("x-api-key")]),
+        );
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     info!(address = %config.bind_addr, "NodeX Token Data service listening");
