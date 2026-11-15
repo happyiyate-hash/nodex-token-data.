@@ -100,14 +100,16 @@ impl MarketDataClient {
                     .map(ToOwned::to_owned),
             };
 
-            let current_liquidity = quotes
-                .get(mint)
-                .and_then(|current: &MarketQuote| current.liquidity_usd)
-                .unwrap_or(0.0);
-            if quote.liquidity_usd.unwrap_or(0.0) > current_liquidity
-                || !quotes.contains_key(mint)
-            {
-                quotes.insert(mint.to_owned(), quote);
+            match quotes.entry(mint.to_owned()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(quote);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let current_liquidity = entry.get().liquidity_usd.unwrap_or(0.0);
+                    if quote.liquidity_usd.unwrap_or(0.0) > current_liquidity {
+                        entry.insert(quote);
+                    }
+                }
             }
         }
 
