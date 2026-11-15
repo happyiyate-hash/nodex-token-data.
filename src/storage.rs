@@ -41,6 +41,7 @@ impl MarketStore {
             "CREATE TABLE IF NOT EXISTS market_trades (
                 mint TEXT NOT NULL,
                 signature TEXT NOT NULL,
+                event_index INTEGER NOT NULL DEFAULT 0,
                 side TEXT NOT NULL,
                 trader TEXT,
                 token_amount REAL,
@@ -49,7 +50,7 @@ impl MarketStore {
                 volume_usd REAL,
                 timestamp_ms INTEGER NOT NULL,
                 source TEXT NOT NULL,
-                PRIMARY KEY (mint, signature)
+                PRIMARY KEY (mint, signature, event_index)
             )",
         )
         .execute(&pool)
@@ -62,6 +63,44 @@ impl MarketStore {
             .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("amount_sol"));
         if !has_amount_sol {
             sqlx::query("ALTER TABLE market_trades ADD COLUMN amount_sol REAL")
+                .execute(&pool)
+                .await?;
+        }
+
+        let has_event_index = trade_columns
+            .iter()
+            .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("event_index"));
+        if !has_event_index {
+            sqlx::query(
+                "CREATE TABLE market_trades_v2 (
+                    mint TEXT NOT NULL,
+                    signature TEXT NOT NULL,
+                    event_index INTEGER NOT NULL DEFAULT 0,
+                    side TEXT NOT NULL,
+                    trader TEXT,
+                    token_amount REAL,
+                    amount_sol REAL,
+                    price_usd REAL,
+                    volume_usd REAL,
+                    timestamp_ms INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    PRIMARY KEY (mint, signature, event_index)
+                )",
+            )
+            .execute(&pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO market_trades_v2
+                 (mint, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source)
+                 SELECT mint, signature, 0, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source
+                 FROM market_trades",
+            )
+            .execute(&pool)
+            .await?;
+            sqlx::query("DROP TABLE market_trades")
+                .execute(&pool)
+                .await?;
+            sqlx::query("ALTER TABLE market_trades_v2 RENAME TO market_trades")
                 .execute(&pool)
                 .await?;
         }
@@ -159,12 +198,13 @@ impl MarketStore {
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO market_trades
-             (mint, signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
-             ON CONFLICT(mint, signature) DO NOTHING",
+             (mint, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+             ON CONFLICT(mint, signature, event_index) DO NOTHING",
         )
         .bind(mint)
         .bind(&trade.signature)
+        .bind(i64::from(trade.event_index))
         .bind(&trade.side)
         .bind(&trade.trader)
         .bind(trade.token_amount)
@@ -217,14 +257,15 @@ impl MarketStore {
     }
 
     pub async fn load_recent_trades(&self, mint: &str, limit: i64) -> Result<Vec<Trade>> {
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64)>(
-            "SELECT signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms FROM market_trades WHERE mint = ? ORDER BY timestamp_ms DESC LIMIT ?"
+        let rows = sqlx::query_as::<_, (String, i64, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64)>(
+            "SELECT signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms FROM market_trades WHERE mint = ? ORDER BY timestamp_ms DESC, signature DESC, event_index DESC LIMIT ?"
         ).bind(mint).bind(limit.clamp(1, 200)).fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
             .map(
                 |(
                     signature,
+                    event_index,
                     side,
                     trader,
                     token_amount,
@@ -234,6 +275,7 @@ impl MarketStore {
                     timestamp_ms,
                 )| Trade {
                     signature,
+                    event_index: u32::try_from(event_index).unwrap_or_default(),
                     side,
                     trader,
                     token_amount,
@@ -306,6 +348,7 @@ mod tests {
         let store = MarketStore::connect("sqlite::memory:").await.unwrap();
         let first = Trade {
             signature: "sig-1".to_owned(),
+            event_index: 0,
             side: "buy".to_owned(),
             trader: Some("wallet-a".to_owned()),
             amount_sol: None,
@@ -316,6 +359,7 @@ mod tests {
         };
         let second = Trade {
             signature: "sig-2".to_owned(),
+            event_index: 0,
             side: "sell".to_owned(),
             trader: Some("wallet-b".to_owned()),
             amount_sol: None,
@@ -346,6 +390,42 @@ mod tests {
         assert_eq!(candles[0].low, 1.5);
         assert_eq!(candles[0].close, 1.5);
         assert_eq!(candles[0].volume, 27.5);
+    }
+
+    #[tokio::test]
+    async fn stores_multiple_swaps_from_one_transaction_by_event_index() {
+        let store = MarketStore::connect("sqlite::memory:").await.unwrap();
+        let first = Trade {
+            signature: "same-signature".to_owned(),
+            event_index: 12,
+            side: "buy".to_owned(),
+            trader: Some("wallet-a".to_owned()),
+            amount_sol: Some(1.0),
+            token_amount: Some(10.0),
+            price_usd: Some(2.0),
+            volume_usd: Some(20.0),
+            timestamp_ms: 120_000,
+        };
+        let second = Trade {
+            signature: "same-signature".to_owned(),
+            event_index: 28,
+            side: "sell".to_owned(),
+            trader: Some("wallet-a".to_owned()),
+            amount_sol: Some(0.5),
+            token_amount: Some(5.0),
+            price_usd: Some(1.5),
+            volume_usd: Some(7.5),
+            timestamp_ms: 121_000,
+        };
+
+        assert!(store.record_confirmed_trade("mint-a", &first).await.unwrap());
+        assert!(store.record_confirmed_trade("mint-a", &second).await.unwrap());
+        assert!(!store.record_confirmed_trade("mint-a", &first).await.unwrap());
+
+        let trades = store.load_recent_trades("mint-a", 10).await.unwrap();
+        assert_eq!(trades.len(), 2);
+        assert!(trades.iter().any(|trade| trade.event_index == 12));
+        assert!(trades.iter().any(|trade| trade.event_index == 28));
     }
 
     #[test]
