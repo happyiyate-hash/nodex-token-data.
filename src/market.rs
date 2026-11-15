@@ -253,6 +253,9 @@ impl MarketDataClient {
 fn parse_trade(row: &Value) -> Option<crate::models::Trade> {
     let attributes = row.get("attributes")?;
     let side = attributes.get("kind")?.as_str()?;
+    if !matches!(side, "buy" | "sell") {
+        return None;
+    }
     let token_amount = match side {
         "buy" => parse_number(attributes.get("to_token_amount")),
         "sell" => parse_number(attributes.get("from_token_amount")),
@@ -386,6 +389,38 @@ mod tests {
     fn missing_transaction_counts_stay_unavailable() {
         let pair = json!({ "txns": { "h24": { "buys": 12 } } });
         assert_eq!(transaction_count(&pair), None);
+    }
+
+    #[test]
+    fn parses_pool_buy_trade_without_mislabelling_quote_amount_as_sol() {
+        let row = json!({
+            "attributes": {
+                "kind": "buy",
+                "tx_hash": "signature",
+                "tx_from_address": "wallet",
+                "to_token_amount": "123.5",
+                "price_to_in_usd": "0.004",
+                "block_timestamp": "2026-11-15T07:00:00Z"
+            }
+        });
+        let trade = parse_trade(&row).unwrap();
+        assert_eq!(trade.side, "buy");
+        assert_eq!(trade.token_amount, Some(123.5));
+        assert_eq!(trade.price_usd, Some(0.004));
+        assert_eq!(trade.amount_sol, None);
+        assert_eq!(trade.trader.as_deref(), Some("wallet"));
+    }
+
+    #[test]
+    fn ignores_unknown_trade_sides() {
+        let row = json!({
+            "attributes": {
+                "kind": "transfer",
+                "tx_hash": "signature",
+                "block_timestamp": "2026-11-15T07:00:00Z"
+            }
+        });
+        assert!(parse_trade(&row).is_none());
     }
 
     #[test]
