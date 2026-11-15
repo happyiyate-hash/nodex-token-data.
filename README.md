@@ -67,7 +67,7 @@ Implemented:
 - Token snapshot response schema and route, including live `getTokenSupply` and `getAccountInfo` retrieval with Helius-first / FluxRPC fallback.
 - Market snapshot fields from the most liquid matching Solana pair returned by DexScreener.
 - GeckoTerminal historical OHLCV and recent pool-trade snapshots, with 60-second caches and shared request pacing.
-- SQLite persistence for historical candles and confirmed swaps, with duplicate-signature protection and local OHLCV aggregation across 1m, 5m, 15m, 30m, 1h and 24h intervals.
+- SQLite persistence for historical candles and confirmed swaps, with duplicate-signature protection and local OHLCV aggregation across 1s, 5s, 10s, 1m, 5m, 15m, 30m, 1h and 24h intervals. Historical OHLCV is paged backwards for a 48-hour seed window (up to four bounded pages).
 - Historical provider candles are seeded without overwriting candles already built from locally observed swaps.
 - Batched market quote polling for active WebSocket subscriptions, publishing `token.market` events through the existing broadcast bus.
 - Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and explicitly identified creator fields when returned).
