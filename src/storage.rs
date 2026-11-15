@@ -44,6 +44,7 @@ impl MarketStore {
                 side TEXT NOT NULL,
                 trader TEXT,
                 token_amount REAL,
+                amount_sol REAL,
                 price_usd REAL,
                 volume_usd REAL,
                 timestamp_ms INTEGER NOT NULL,
@@ -120,8 +121,8 @@ impl MarketStore {
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO market_trades
-             (mint, signature, side, trader, token_amount, price_usd, volume_usd, timestamp_ms, source)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+             (mint, signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
              ON CONFLICT(mint, signature) DO NOTHING",
         )
         .bind(mint)
@@ -129,6 +130,7 @@ impl MarketStore {
         .bind(&trade.side)
         .bind(&trade.trader)
         .bind(trade.token_amount)
+        .bind(trade.amount_sol)
         .bind(trade.price_usd)
         .bind(trade.volume_usd)
         .bind(trade.timestamp_ms)
@@ -174,6 +176,15 @@ impl MarketStore {
 
         transaction.commit().await?;
         Ok(inserted)
+    }
+
+    pub async fn load_recent_trades(&self, mint: &str, limit: i64) -> Result<Vec<Trade>> {
+        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64)>(
+            "SELECT signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms FROM market_trades WHERE mint = ? ORDER BY timestamp_ms DESC LIMIT ?"
+        ).bind(mint).bind(limit.clamp(1, 200)).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|(signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms)| Trade {
+            signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms
+        }).collect())
     }
 
     pub async fn load_candles(
