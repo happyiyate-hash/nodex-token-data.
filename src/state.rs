@@ -156,7 +156,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::AppState;
+    use super::{AppState, MAX_ACTIVE_MARKET_MINTS};
     use crate::config::AppConfig;
     use std::net::SocketAddr;
 
