@@ -34,8 +34,7 @@ pub async fn decode_trades(
 
     let mut trades = Vec::with_capacity(events.len());
     for event in events {
-        if let Some(trade) =
-            decode_single_trade(event, mint, signature, tx, market, decimals).await
+        if let Some(trade) = decode_single_trade(event, mint, signature, tx, market, decimals).await
         {
             trades.push(trade);
         }
@@ -245,9 +244,7 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
         let expected = events.iter().try_fold(0_i128, |total, event| {
             total.checked_add(expected_token_delta(event)?)
         });
-        if expected.is_some()
-            && token_balance_delta(tx, mint, &trader) == expected
-        {
+        if expected.is_some() && token_balance_delta(tx, mint, &trader) == expected {
             accepted.extend(events);
         }
     }
