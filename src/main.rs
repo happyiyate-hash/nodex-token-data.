@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod components;
 mod market;
 mod middleware;
 mod models;
