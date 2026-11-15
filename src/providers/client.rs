@@ -217,11 +217,24 @@ impl ProviderClient {
         })
     }
 
-    pub async fn fetch_holders_for_mint(&self, mint: &str) -> Result<crate::models::HoldersSnapshot> {
-        let supply = self.request_rpc("getTokenSupply", json!([mint, {"commitment":"confirmed"}])).await?;
-        let value = supply.get("value").ok_or_else(|| anyhow!("Token supply response missing value"))?;
-        let raw = value.get("amount").and_then(Value::as_str).ok_or_else(|| anyhow!("Token supply amount missing"))?;
-        let decimals = value.get("decimals").and_then(Value::as_u64).and_then(|v| u8::try_from(v).ok())
+    pub async fn fetch_holders_for_mint(
+        &self,
+        mint: &str,
+    ) -> Result<crate::models::HoldersSnapshot> {
+        let supply = self
+            .request_rpc("getTokenSupply", json!([mint, {"commitment":"confirmed"}]))
+            .await?;
+        let value = supply
+            .get("value")
+            .ok_or_else(|| anyhow!("Token supply response missing value"))?;
+        let raw = value
+            .get("amount")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Token supply amount missing"))?;
+        let decimals = value
+            .get("decimals")
+            .and_then(Value::as_u64)
+            .and_then(|v| u8::try_from(v).ok())
             .ok_or_else(|| anyhow!("Token supply decimals missing"))?;
         self.fetch_largest_holders(mint, raw, decimals).await
     }
