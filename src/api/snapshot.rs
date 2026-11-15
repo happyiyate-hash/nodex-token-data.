@@ -12,7 +12,9 @@ pub struct SnapshotQuery {
     pub timeframe: Option<String>,
 }
 
-const TIMEFRAMES: &[&str] = &["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"];
+const TIMEFRAMES: &[&str] = &[
+    "1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H",
+];
 const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 fn is_valid_mint(mint: &str) -> bool {
@@ -25,12 +27,21 @@ pub async fn get_snapshot(
     State(state): State<AppState>,
 ) -> Result<Json<TokenSnapshot>, (StatusCode, String)> {
     if !is_valid_mint(&mint) {
-        return Err((StatusCode::BAD_REQUEST, "Invalid Solana mint address".to_owned()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid Solana mint address".to_owned(),
+        ));
     }
 
-    let timeframe = query.timeframe.unwrap_or_else(|| "1S".to_owned()).to_uppercase();
+    let timeframe = query
+        .timeframe
+        .unwrap_or_else(|| "1S".to_owned())
+        .to_uppercase();
     if !TIMEFRAMES.contains(&timeframe.as_str()) {
-        return Err((StatusCode::BAD_REQUEST, "Unsupported chart timeframe".to_owned()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Unsupported chart timeframe".to_owned(),
+        ));
     }
 
     let chain_data = state
@@ -60,6 +71,7 @@ pub async fn get_snapshot(
         _ => "Unknown token program".to_owned(),
     });
     snapshot.info.creator_address = chain_data.creator_address;
+
     if let Some(quote) = market_quote {
         snapshot.market.price_usd = quote.price_usd;
         snapshot.market.market_cap_usd = quote.market_cap_usd;
@@ -74,6 +86,7 @@ pub async fn get_snapshot(
             "partial"
         };
     }
+
     snapshot.data_status.identity =
         if snapshot.identity.name.is_some() && snapshot.identity.symbol.is_some() {
             "available"
