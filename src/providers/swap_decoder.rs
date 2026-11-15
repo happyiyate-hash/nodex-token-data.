@@ -233,11 +233,8 @@ fn token_balance_delta(tx: &Value, mint: &str, owner: &str) -> Option<i128> {
         found.then_some(sum)
     }
 
-    let before = total(tx, "/meta/preTokenBalances", mint, owner).unwrap_or(0);
-    let after = total(tx, "/meta/postTokenBalances", mint, owner).unwrap_or(0);
-    if before == 0 && after == 0 {
-        return None;
-    }
+    let before = total(tx, "/meta/preTokenBalances", mint, owner)?;
+    let after = total(tx, "/meta/postTokenBalances", mint, owner)?;
     if after >= before {
         i128::try_from(after - before).ok()
     } else {
@@ -320,6 +317,53 @@ mod tests {
         let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
         let mint = bs58::encode([1; 32]).into_string();
         assert!(decode_event(&refs, &mint, &Value::Null).is_none());
+    }
+
+    #[test]
+    fn attributes_pumpswap_event_only_to_matching_trader_mint_delta() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let mut bytes = vec![0_u8; 184];
+        bytes[..8].copy_from_slice(&[103, 244, 82, 31, 44, 245, 119, 119]);
+        bytes[8..16].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
+        bytes[16..24].copy_from_slice(&500_u64.to_le_bytes());
+        bytes[64..72].copy_from_slice(&250_u64.to_le_bytes());
+        bytes[152..184].copy_from_slice(&[4; 32]);
+        let logs = [
+            format!("Program {PUMP_SWAP} invoke [1]"),
+            format!("Program data: {}", STANDARD.encode(bytes)),
+            format!("Program {PUMP_SWAP} success"),
+        ];
+        let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1000"}}],
+            "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1500"}}]
+        }});
+        let event = decode_event(&refs, &mint, &tx).unwrap();
+        assert_eq!(event.side, "buy");
+        assert_eq!(event.base, 500);
+    }
+
+    #[test]
+    fn rejects_pumpswap_event_when_token_balance_delta_does_not_match() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let mut bytes = vec![0_u8; 184];
+        bytes[..8].copy_from_slice(&[103, 244, 82, 31, 44, 245, 119, 119]);
+        bytes[8..16].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
+        bytes[16..24].copy_from_slice(&500_u64.to_le_bytes());
+        bytes[64..72].copy_from_slice(&250_u64.to_le_bytes());
+        bytes[152..184].copy_from_slice(&[4; 32]);
+        let logs = [
+            format!("Program {PUMP_SWAP} invoke [1]"),
+            format!("Program data: {}", STANDARD.encode(bytes)),
+        ];
+        let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1000"}}],
+            "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1499"}}]
+        }});
+        assert!(decode_event(&refs, &mint, &tx).is_none());
     }
 
     #[test]
