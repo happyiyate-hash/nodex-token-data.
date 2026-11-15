@@ -366,6 +366,7 @@ fn parse_trade(row: &Value) -> Option<Trade> {
 
     Some(Trade {
         signature: attributes.get("tx_hash")?.as_str()?.to_owned(),
+        event_index: 0,
         side: side.to_owned(),
         trader: attributes
             .get("tx_from_address")
