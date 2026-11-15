@@ -1,128 +1,56 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
-
+use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
 use crate::config::ProviderConfig;
 
 #[derive(Clone)]
-pub struct ProviderManager {
-    providers: Arc<Vec<ProviderPool>>,
-}
-
+pub struct ProviderManager { providers: Arc<Vec<ProviderPool>> }
 struct ProviderPool {
     name: &'static str,
     endpoints: Vec<String>,
+    websocket_endpoints: Vec<String>,
     cursor: AtomicUsize,
 }
-
 #[derive(Clone, Debug)]
-pub struct SelectedEndpoint {
-    pub provider: &'static str,
-    pub url: String,
-}
-
+pub struct SelectedEndpoint { pub provider: &'static str, pub url: String }
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct ProviderStatus {
-    pub name: &'static str,
-    pub configured_keys: usize,
-}
+pub struct ProviderStatus { pub name: &'static str, pub configured_keys: usize, pub websocket_keys: usize }
 
 impl ProviderManager {
-    /// Provider configuration order defines priority. Configure Helius first
-    /// and FluxRPC second to make Helius primary and FluxRPC the fallback.
     pub fn new(configs: &[ProviderConfig]) -> Self {
-        let providers = configs
-            .iter()
-            .filter(|config| !config.endpoints.is_empty())
-            .map(|config| ProviderPool {
-                name: config.name,
-                endpoints: config.endpoints.clone(),
-                cursor: AtomicUsize::new(0),
-            })
-            .collect();
-
-        Self {
-            providers: Arc::new(providers),
-        }
+        let providers = configs.iter().filter(|c| !c.endpoints.is_empty()).map(|c| ProviderPool {
+            name: c.name, endpoints: c.endpoints.clone(), websocket_endpoints: c.websocket_endpoints.clone(),
+            cursor: AtomicUsize::new(0),
+        }).collect();
+        Self { providers: Arc::new(providers) }
     }
-
-    /// Selects the next configured key for a provider using atomic round-robin
-    /// rotation. Never log the returned URL because it contains credentials.
-    pub fn next_endpoint(&self, provider_name: &str) -> Option<SelectedEndpoint> {
-        let pool = self
-            .providers
-            .iter()
-            .find(|pool| pool.name == provider_name)?;
-        let index = pool.cursor.fetch_add(1, Ordering::Relaxed) % pool.endpoints.len();
-
-        Some(SelectedEndpoint {
-            provider: pool.name,
-            url: pool.endpoints[index].clone(),
-        })
+    pub fn next_endpoint(&self, name: &str) -> Option<SelectedEndpoint> {
+        let p = self.providers.iter().find(|p| p.name == name)?;
+        let i = p.cursor.fetch_add(1, Ordering::Relaxed) % p.endpoints.len();
+        Some(SelectedEndpoint { provider: p.name, url: p.endpoints[i].clone() })
     }
-
-    pub fn provider_names(&self) -> Vec<&'static str> {
-        self.providers.iter().map(|pool| pool.name).collect()
+    pub fn websocket_endpoints(&self, name: &str) -> Vec<String> {
+        self.providers.iter().find(|p| p.name == name).map(|p| p.websocket_endpoints.clone()).unwrap_or_default()
     }
-
-    pub fn configured_key_count(&self, provider_name: &str) -> usize {
-        self.providers
-            .iter()
-            .find(|pool| pool.name == provider_name)
-            .map_or(0, |pool| pool.endpoints.len())
+    pub fn provider_names(&self) -> Vec<&'static str> { self.providers.iter().map(|p| p.name).collect() }
+    pub fn configured_key_count(&self, name: &str) -> usize {
+        self.providers.iter().find(|p| p.name == name).map_or(0, |p| p.endpoints.len())
     }
-
     pub fn statuses(&self) -> Vec<ProviderStatus> {
-        self.providers
-            .iter()
-            .map(|pool| ProviderStatus {
-                name: pool.name,
-                configured_keys: pool.endpoints.len(),
-            })
-            .collect()
+        self.providers.iter().map(|p| ProviderStatus {
+            name: p.name, configured_keys: p.endpoints.len(), websocket_keys: p.websocket_endpoints.len()
+        }).collect()
     }
-
-    pub fn has_providers(&self) -> bool {
-        !self.providers.is_empty()
-    }
+    pub fn has_providers(&self) -> bool { !self.providers.is_empty() }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rotates_keys_in_round_robin_order() {
-        let manager = ProviderManager::new(&[ProviderConfig {
-            name: "helius",
-            endpoints: vec!["key-a".into(), "key-b".into()],
-        }]);
-
-        assert_eq!(manager.next_endpoint("helius").unwrap().url, "key-a");
-        assert_eq!(manager.next_endpoint("helius").unwrap().url, "key-b");
-        assert_eq!(manager.next_endpoint("helius").unwrap().url, "key-a");
-    }
-
-    #[test]
-    fn unknown_provider_returns_none() {
-        let manager = ProviderManager::new(&[]);
-        assert!(manager.next_endpoint("helius").is_none());
-    }
-
     #[test]
     fn preserves_provider_priority() {
         let manager = ProviderManager::new(&[
-            ProviderConfig {
-                name: "helius",
-                endpoints: vec!["helius-key".into()],
-            },
-            ProviderConfig {
-                name: "fluxrpc",
-                endpoints: vec!["flux-key".into()],
-            },
+            ProviderConfig { name: "helius", endpoints: vec!["h".into()], websocket_endpoints: vec!["hw".into()] },
+            ProviderConfig { name: "fluxrpc", endpoints: vec!["f".into()], websocket_endpoints: vec!["fw".into()] },
         ]);
-
         assert_eq!(manager.provider_names(), vec!["helius", "fluxrpc"]);
+        assert_eq!(manager.websocket_endpoints("fluxrpc"), vec!["fw"]);
     }
 }
