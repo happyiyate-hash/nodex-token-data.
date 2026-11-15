@@ -17,6 +17,7 @@ use crate::{
     providers::{ProviderClient, ProviderManager},
     storage::MarketStore,
     stream::StreamEvent,
+    models::Trade,
 };
 
 const MAX_ACTIVE_MARKET_MINTS: usize = 500;
@@ -101,7 +102,7 @@ impl AppState {
         }
     }
 
-    fn active_mints(&self) -> Vec<String> {
+    pub fn subscribed_mints(&self) -> Vec<String> {
         self.active_mints
             .lock()
             .map(|active| active.keys().cloned().collect())
@@ -116,7 +117,7 @@ impl AppState {
 
         loop {
             interval.tick().await;
-            let mints = self.active_mints();
+            let mints = self.subscribed_mints();
 
             for batch in mints.chunks(30) {
                 match self.market_client.fetch_quotes(batch).await {
@@ -150,6 +151,46 @@ impl AppState {
         }
     }
 
+    pub async fn publish_confirmed_trade(&self, mint: &str, trade: Trade) -> Result<()> {
+        if !self.market_store.record_confirmed_trade(mint, &trade).await? { return Ok(()); }
+        let timestamp_ms = trade.timestamp_ms.max(0) as u64;
+        let data = serde_json::to_value(&trade)?;
+        let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        self.publish(StreamEvent { event: "trade_update".into(), mint: mint.into(), topic: "token.trades".into(), sequence, timestamp_ms, data: data.clone() });
+        let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        self.publish(StreamEvent { event: "activity_update".into(), mint: mint.into(), topic: "token.activity".into(), sequence, timestamp_ms, data });
+        for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
+            if let Ok(points) = self.market_store.load_candles(mint, timeframe, 1).await {
+                if let Some(candle) = points.last() {
+                    let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+                    self.publish(StreamEvent { event: "candle_update".into(), mint: mint.into(), topic: "token.chart".into(), sequence, timestamp_ms, data: serde_json::json!({"timeframe": timeframe, "candle": candle}) });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Helius is primary. FluxRPC is used after Helius fails or disconnects.
+    pub async fn run_provider_streams(self) {
+        loop {
+            let mut attempted = false;
+            for provider in ["helius", "fluxrpc"] {
+                for endpoint in self.providers.websocket_endpoints(provider) {
+                    attempted = true;
+                    let result = match provider {
+                        "helius" => crate::providers::helius_ws::run_once(&self, &endpoint).await,
+                        "fluxrpc" => crate::providers::fluxrpc_ws::run_once(&self, &endpoint).await,
+                        _ => continue,
+                    };
+                    if let Err(error) = result {
+                        warn!(provider, error = %error, "Provider WebSocket disconnected; trying next provider");
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(if attempted { 3 } else { 15 })).await;
+        }
+    }
+
     pub fn publish(&self, event: StreamEvent) {
         let _ = self.stream_tx.send(event);
     }
@@ -176,20 +217,20 @@ mod tests {
         let state = test_state().await;
         assert!(state.track_mint("mint-a"));
         assert!(state.track_mint("mint-a"));
-        assert_eq!(state.active_mints(), vec!["mint-a".to_owned()]);
+        assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a");
-        assert_eq!(state.active_mints(), vec!["mint-a".to_owned()]);
+        assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a");
-        assert!(state.active_mints().is_empty());
+        assert!(state.subscribed_mints().is_empty());
     }
 
     #[tokio::test]
     async fn untracking_unknown_mint_is_safe() {
         let state = test_state().await;
         state.untrack_mint("unknown");
-        assert!(state.active_mints().is_empty());
+        assert!(state.subscribed_mints().is_empty());
     }
 
     #[tokio::test]
@@ -199,6 +240,6 @@ mod tests {
             assert!(state.track_mint(&format!("mint-{index}")));
         }
         assert!(!state.track_mint("mint-over-limit"));
-        assert_eq!(state.active_mints().len(), MAX_ACTIVE_MARKET_MINTS);
+        assert_eq!(state.subscribed_mints().len(), MAX_ACTIVE_MARKET_MINTS);
     }
 }
