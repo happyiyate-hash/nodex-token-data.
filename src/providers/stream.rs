@@ -3,13 +3,17 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
+    collections::HashMap,
+    time::{Duration, Instant},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
+const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(2);
+const SUBSCRIPTION_ACK_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Maintains mint-scoped logsSubscribe subscriptions on one provider socket.
+/// A mint is considered active only after the provider acknowledges it.
 pub async fn run_connection(
     state: &AppState,
     endpoint: &str,
@@ -19,61 +23,151 @@ pub async fn run_connection(
         .await
         .with_context(|| format!("{provider} WebSocket connection failed"))?;
     info!(provider, "Solana provider WebSocket connected");
+
     let mut request_id = 1_u64;
-    let mut pending = HashMap::<u64, String>::new();
+    let mut pending = HashMap::<u64, (String, Instant)>::new();
     let mut subscription_to_mint = HashMap::<u64, String>::new();
     let mut mint_to_subscription = HashMap::<String, u64>::new();
-    let mut active = HashSet::<String>::new();
-    let mut refresh = tokio::time::interval(Duration::from_secs(5));
+    let mut refresh = tokio::time::interval(SUBSCRIPTION_REFRESH);
     let mut keepalive = tokio::time::interval(Duration::from_secs(30));
+
     loop {
         tokio::select! {
             _ = keepalive.tick() => {
-                socket.send(Message::Ping(Vec::new().into())).await?;
+                socket.send(Message::Ping(Vec::new().into())).await
+                    .context("Provider WebSocket ping failed")?;
             }
             _ = refresh.tick() => {
-                let current = state.subscribed_mints().into_iter().collect::<HashSet<_>>();
-                for mint in current.difference(&active) {
-                    let id = request_id; request_id += 1; pending.insert(id, mint.clone());
-                    socket.send(Message::Text(json!({"jsonrpc":"2.0","id":id,"method":"logsSubscribe","params":[{"mentions":[mint]},{"commitment":"confirmed"}]}).to_string().into())).await.context("Provider mint subscription failed")?;
+                let now = Instant::now();
+                pending.retain(|_, (_, sent_at)| now.duration_since(*sent_at) < SUBSCRIPTION_ACK_TIMEOUT);
+
+                let desired = state.subscribed_mints().into_iter()
+                    .collect::<std::collections::HashSet<_>>();
+                let acknowledged = mint_to_subscription.keys()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
+                let awaiting = pending.values()
+                    .map(|(mint, _)| mint.clone())
+                    .collect::<std::collections::HashSet<_>>();
+
+                for mint in desired.difference(&acknowledged).filter(|mint| !awaiting.contains(*mint)) {
+                    let id = request_id;
+                    request_id = request_id.wrapping_add(1).max(1);
+                    pending.insert(id, (mint.clone(), Instant::now()));
+                    let request = json!({
+                        "jsonrpc":"2.0",
+                        "id":id,
+                        "method":"logsSubscribe",
+                        "params":[{"mentions":[mint]},{"commitment":"confirmed"}]
+                    });
+                    socket.send(Message::Text(request.to_string().into())).await
+                        .with_context(|| format!("{provider} mint subscription send failed"))?;
                 }
-                for mint in active.difference(&current) {
-                    if let Some(subscription) = mint_to_subscription.remove(mint) {
-                        let id = request_id; request_id += 1;
-                        socket.send(Message::Text(json!({"jsonrpc":"2.0","id":id,"method":"logsUnsubscribe","params":[subscription]}).to_string().into())).await?;
+
+                let removed = mint_to_subscription.keys()
+                    .filter(|mint| !desired.contains(*mint))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for mint in removed {
+                    if let Some(subscription) = mint_to_subscription.remove(&mint) {
                         subscription_to_mint.remove(&subscription);
+                        let id = request_id;
+                        request_id = request_id.wrapping_add(1).max(1);
+                        let request = json!({
+                            "jsonrpc":"2.0",
+                            "id":id,
+                            "method":"logsUnsubscribe",
+                            "params":[subscription]
+                        });
+                        socket.send(Message::Text(request.to_string().into())).await
+                            .context("Provider unsubscribe send failed")?;
                     }
                 }
-                active = current;
+
+                // Drop pending subscriptions for tokens no longer requested.
+                pending.retain(|_, (mint, _)| desired.contains(mint));
             }
             incoming = socket.next() => {
-                let Some(incoming) = incoming else { return Err(anyhow!("{provider} WebSocket closed")); };
+                let Some(incoming) = incoming else {
+                    return Err(anyhow!("{provider} WebSocket closed"));
+                };
                 match incoming.context("Provider WebSocket receive failed")? {
                     Message::Text(text) => {
-                        let payload: Value = match serde_json::from_str(&text) { Ok(v) => v, Err(_) => continue };
+                        let payload: Value = match serde_json::from_str(&text) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                warn!(provider, error = %error, "Ignoring malformed provider WebSocket message");
+                                continue;
+                            }
+                        };
+
                         if let Some(id) = payload.get("id").and_then(Value::as_u64) {
-                            if let Some(mint) = pending.remove(&id) {
-                                if let Some(sub) = payload.get("result").and_then(Value::as_u64) {
-                                    subscription_to_mint.insert(sub, mint.clone()); mint_to_subscription.insert(mint, sub);
-                                } else if let Some(error) = payload.get("error") { warn!(provider, mint, error=%error, "Provider rejected mint subscription"); }
+                            if let Some((mint, _)) = pending.remove(&id) {
+                                if let Some(subscription) = payload.get("result").and_then(Value::as_u64) {
+                                    if state.subscribed_mints().iter().any(|active| active == &mint) {
+                                        subscription_to_mint.insert(subscription, mint.clone());
+                                        mint_to_subscription.insert(mint.clone(), subscription);
+                                        info!(provider, mint, subscription, "Provider mint subscription acknowledged");
+                                    } else {
+                                        let unsubscribe_id = request_id;
+                                        request_id = request_id.wrapping_add(1).max(1);
+                                        let request = json!({
+                                            "jsonrpc":"2.0",
+                                            "id":unsubscribe_id,
+                                            "method":"logsUnsubscribe",
+                                            "params":[subscription]
+                                        });
+                                        socket.send(Message::Text(request.to_string().into())).await?;
+                                    }
+                                } else if let Some(error) = payload.get("error") {
+                                    warn!(provider, mint, error = %error, "Provider rejected mint subscription; it will be retried");
+                                } else {
+                                    warn!(provider, mint, "Provider returned an invalid subscription acknowledgement");
+                                }
                             }
                             continue;
                         }
-                        if payload.get("method").and_then(Value::as_str) != Some("logsNotification") { continue; }
-                        let Some(sub) = payload.pointer("/params/subscription").and_then(Value::as_u64) else { continue; };
-                        let Some(mint) = subscription_to_mint.get(&sub).cloned() else { continue; };
-                        let Some(value) = payload.pointer("/params/result/value") else { continue; };
-                        if !value.get("err").is_some_and(Value::is_null) { continue; }
-                        let Some(signature) = value.get("signature").and_then(Value::as_str) else { continue; };
-                        let logs = value.get("logs").and_then(Value::as_array).cloned().unwrap_or_default();
-                        match state.provider_client.fetch_transaction(signature).await {
-                            Ok(transaction) => {
-                                if let Some(trade) = super::swap_decoder::decode_trade(&mint, signature, &transaction, &logs, &state.market_client).await {
-                                    if let Err(error) = state.publish_confirmed_trade(&mint, trade).await { warn!(provider, mint, error=%error, "Could not persist decoded swap"); }
-                                }
-                            }
-                            Err(error) => warn!(provider, mint, signature, error=%error, "Could not fetch confirmed transaction"),
+
+                        if payload.get("method").and_then(Value::as_str) != Some("logsNotification") {
+                            continue;
                         }
+                        let Some(subscription) = payload.pointer("/params/subscription").and_then(Value::as_u64) else {
+                            continue;
+                        };
+                        let Some(mint) = subscription_to_mint.get(&subscription).cloned() else {
+                            continue;
+                        };
+                        let Some(value) = payload.pointer("/params/result/value") else {
+                            continue;
+                        };
+                        if !value.get("err").is_some_and(Value::is_null) {
+                            continue;
+                        }
+                        let Some(signature) = value.get("signature").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let logs = value.get("logs").and_then(Value::as_array).cloned().unwrap_or_default();
+                        let state = state.clone();
+                        let mint = mint.clone();
+                        let signature = signature.to_owned();
+                        tokio::spawn(async move {
+                            match state.provider_client.fetch_transaction(&signature).await {
+                                Ok(transaction) => {
+                                    if let Some(trade) = super::swap_decoder::decode_trade(
+                                        &mint,
+                                        &signature,
+                                        &transaction,
+                                        &logs,
+                                        &state.market_client,
+                                    ).await {
+                                        if let Err(error) = state.publish_confirmed_trade(&mint, trade).await {
+                                            warn!(provider, mint, error = %error, "Could not persist decoded swap");
+                                        }
+                                    }
+                                }
+                                Err(error) => warn!(provider, mint, signature, error = %error, "Could not fetch confirmed transaction"),
+                            }
+                        });
                     }
                     Message::Ping(payload) => socket.send(Message::Pong(payload)).await?,
                     Message::Close(_) => return Err(anyhow!("{provider} WebSocket closed by remote")),
