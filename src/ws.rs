@@ -94,6 +94,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     continue;
                                 }
 
+                                if command.topics.is_empty() {
+                                    if send_json(&mut sender, json!({
+                                        "event": "error",
+                                        "code": "empty_topics"
+                                    })).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+
                                 if selected_mint.as_deref() != Some(mint.as_str()) {
                                     if let Some(previous_mint) = selected_mint.replace(mint.clone()) {
                                         state.untrack_mint(&previous_mint);
