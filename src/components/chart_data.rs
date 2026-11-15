@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::{market::MarketDataClient, models::ChartPoint, storage::MarketStore};
+use anyhow::Result;
 
 pub async fn fetch(
     mint: &str,
@@ -11,7 +11,9 @@ pub async fn fetch(
     if let Some(pool) = pair_address {
         if let Ok(history) = market.fetch_chart(pool, timeframe).await {
             if !history.is_empty() {
-                store.seed_historical_candles(mint, timeframe, &history).await?;
+                store
+                    .seed_historical_candles(mint, timeframe, &history)
+                    .await?;
             }
         }
     }
