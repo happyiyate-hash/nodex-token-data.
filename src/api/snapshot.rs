@@ -80,7 +80,7 @@ pub async fn get_snapshot(
     }
     let chart_points = state
         .market_store
-        .load_candles(&mint, &timeframe, 1000)
+        .load_candles(&mint, &timeframe, 5000)
         .await
         .map_err(|_| {
             (
