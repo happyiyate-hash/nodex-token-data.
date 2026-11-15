@@ -40,7 +40,7 @@ impl AppConfig {
             let rpc = env::var("FLUXRPC_RPC_URL_TEMPLATE")
                 .unwrap_or_else(|_| "https://eu.fluxrpc.com/?key={api_key}".into());
             let ws = env::var("FLUXRPC_WS_URL_TEMPLATE")
-                .unwrap_or_else(|_| "wss://ws.eu.fluxrpc.com/?key={api_key}".into());
+                .unwrap_or_else(|_| "wss://ws.eu.fluxrpc.com?key={api_key}".into());
             providers.push(build_provider("fluxrpc", &fluxrpc, &rpc, &ws)?);
         }
         let database_url = env::var("NODEX_DATABASE_URL")
