@@ -66,7 +66,7 @@ Implemented:
 - Token snapshot response schema and route, including live `getTokenSupply` and `getAccountInfo` retrieval with Helius-first / FluxRPC fallback.
 - Market snapshot fields from the most liquid matching Solana pair returned by DexScreener.
 - Batched market quote polling for active WebSocket subscriptions, publishing `token.market` events through the existing broadcast bus.
-- Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and creator authority when returned).
+- Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and explicitly identified creator fields when returned).
 - Short-lived, single-use WebSocket tickets.
 - Authenticated WebSocket handshake, topic subscription acknowledgements, unsubscribe and chart-timeframe command.
 - In-process broadcast event bus for provider/indexer workers to publish typed topic events.
@@ -74,10 +74,8 @@ Implemented:
 
 Not yet implemented:
 - Trade decoding, historical OHLCV history and holder indexing.
-- Metadata enrichment when Helius DAS is not configured or does not return asset metadata.
-- Durable storage, candle aggregation and backfill after service downtime.
-- A persistent event/indexing pipeline and event producers. The WebSocket currently provides the subscription transport; no live market events are emitted until those workers are connected.
-- Durable historical storage, retention and candle aggregation.
+- Helius DAS metadata when the DAS method is unavailable or the asset has no returned metadata.
+- Persistent historical indexing, retention, candle aggregation and backfill after service downtime. The current market publisher is active but uses five-second REST polling.
 - Production deployment and TLS verification.
 
 **Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market price, liquidity, 5-minute/24-hour change, 24-hour volume and transaction count can now be populated from DexScreener when a matching pair exists. The backend polls active subscribed tokens in batches and relays those quotes over its own WebSocket. This is periodic REST polling, not a provider-pushed market feed. Historical chart candles, decoded trades, holder counts and top-holder indexing still return unavailable/null values until their data sources and storage are implemented. Do not present this as a complete or production-ready market-data service.
