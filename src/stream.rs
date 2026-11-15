@@ -10,6 +10,7 @@ pub struct StreamEvent {
     pub timestamp_ms: u64,
     pub data: Value,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct ClientCommand {
     pub command: String,
@@ -18,7 +19,13 @@ pub struct ClientCommand {
     pub topics: Vec<String>,
     pub timeframe: Option<String>,
 }
+
 pub const TOPICS: &[&str] = &[
-    "token.market", "token.chart", "token.trades", "token.activity",
-    "token.holders", "token.info", "token.creator",
+    "token.market",
+    "token.chart",
+    "token.trades",
+    "token.activity",
+    "token.holders",
+    "token.info",
+    "token.creator",
 ];
