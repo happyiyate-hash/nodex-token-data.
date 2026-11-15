@@ -108,11 +108,11 @@ impl ProviderClient {
             .or_else(|| metadata.pointer("/content/files/0/uri"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        // Do not label an update authority as the token creator. Only accept
+        // an explicit creator field when the metadata source provides one.
         let creator_address = metadata
-            .get("authorities")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(|item| item.get("address"))
+            .pointer("/creators/0/address")
+            .or_else(|| metadata.pointer("/content/metadata/creators/0/address"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
 
