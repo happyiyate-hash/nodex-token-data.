@@ -1,17 +1,25 @@
 use crate::{models::TokenInfo, providers::TokenChainData};
 
 fn format_raw_amount(raw: &str, decimals: u8) -> String {
-    if decimals == 0 { return raw.to_owned(); }
+    if decimals == 0 {
+        return raw.to_owned();
+    }
     let decimals = decimals as usize;
     let digits = raw.trim_start_matches('0');
     let digits = if digits.is_empty() { "0" } else { digits };
     let padded = if digits.len() <= decimals {
         format!("{}{}", "0".repeat(decimals + 1 - digits.len()), digits)
-    } else { digits.to_owned() };
+    } else {
+        digits.to_owned()
+    };
     let split = padded.len() - decimals;
     let whole = &padded[..split];
     let fraction = padded[split..].trim_end_matches('0');
-    if fraction.is_empty() { whole.to_owned() } else { format!("{whole}.{fraction}") }
+    if fraction.is_empty() {
+        whole.to_owned()
+    } else {
+        format!("{whole}.{fraction}")
+    }
 }
 
 pub fn from_chain(chain: &TokenChainData) -> TokenInfo {
