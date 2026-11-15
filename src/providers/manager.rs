@@ -16,7 +16,6 @@ struct ProviderPool {
 }
 #[derive(Clone, Debug)]
 pub struct SelectedEndpoint {
-    pub provider: &'static str,
     pub url: String,
 }
 #[derive(Clone, Debug, serde::Serialize)]
