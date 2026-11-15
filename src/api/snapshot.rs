@@ -15,12 +15,16 @@ pub struct SnapshotQuery {
 const TIMEFRAMES: &[&str] = &["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"];
 const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+fn is_valid_mint(mint: &str) -> bool {
+    (32..=44).contains(&mint.len()) && mint.chars().all(|character| BASE58.contains(character))
+}
+
 pub async fn get_snapshot(
     Path(mint): Path<String>,
     Query(query): Query<SnapshotQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<TokenSnapshot>, (StatusCode, String)> {
-    if !(32..=44).contains(&mint.len()) || !mint.chars().all(|character| BASE58.contains(character)) {
+    if !is_valid_mint(&mint) {
         return Err((StatusCode::BAD_REQUEST, "Invalid Solana mint address".to_owned()));
     }
 
@@ -53,12 +57,35 @@ pub async fn get_snapshot(
         _ => "Unknown token program".to_owned(),
     });
     snapshot.info.creator_address = chain_data.creator_address;
-    snapshot.data_status.identity = if snapshot.identity.name.is_some() || snapshot.identity.symbol.is_some() {
-        "partial"
-    } else {
-        "unavailable"
-    };
+    snapshot.data_status.identity =
+        if snapshot.identity.name.is_some() && snapshot.identity.symbol.is_some() {
+            "available"
+        } else {
+            "partial"
+        };
     snapshot.data_status.info = "available";
 
     Ok(Json(snapshot))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_mint;
+
+    #[test]
+    fn rejects_invalid_mint_characters() {
+        assert!(!is_valid_mint("0000000000000000000000000000000!"));
+        assert!(!is_valid_mint("0OIl0000000000000000000000000000"));
+    }
+
+    #[test]
+    fn rejects_mints_outside_base58_length_bounds() {
+        assert!(!is_valid_mint("short"));
+        assert!(!is_valid_mint(&"1".repeat(45)));
+    }
+
+    #[test]
+    fn accepts_base58_mint_shaped_input() {
+        assert!(is_valid_mint("So11111111111111111111111111111111111111112"));
+    }
 }
