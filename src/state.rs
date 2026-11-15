@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::Result;
 use tokio::sync::broadcast;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     config::AppConfig,
