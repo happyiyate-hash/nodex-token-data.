@@ -256,9 +256,8 @@ impl MarketDataClient {
         }
 
         self.wait_for_gecko_slot().await;
-        let url = format!(
-            "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/trades"
-        );
+        let url =
+            format!("https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/trades");
         let response = self
             .http
             .get(url)
@@ -281,10 +280,7 @@ impl MarketDataClient {
             .get("data")
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("Recent-trades response has no data list"))?;
-        let trades = rows
-            .iter()
-            .filter_map(parse_trade)
-            .collect::<Vec<_>>();
+        let trades = rows.iter().filter_map(parse_trade).collect::<Vec<_>>();
 
         if let Ok(mut cache) = self.trades_cache.lock() {
             store_cache(&mut cache, cache_key, trades.clone());
@@ -315,10 +311,7 @@ fn store_cache<T: Clone>(
     cache.retain(|_, (expires_at, _)| *expires_at > now);
 
     if cache.len() >= MAX_CACHE_ENTRIES {
-        let evicted_key = cache
-            .keys()
-            .find(|candidate| *candidate != &key)
-            .cloned();
+        let evicted_key = cache.keys().find(|candidate| *candidate != &key).cloned();
         if let Some(evicted_key) = evicted_key {
             cache.remove(&evicted_key);
         }
@@ -379,9 +372,11 @@ fn parse_chart_point(row: &Value) -> Option<ChartPoint> {
     if values.len() < 6 {
         return None;
     }
-    let timestamp_seconds = values[0]
-        .as_i64()
-        .or_else(|| values[0].as_u64().and_then(|value| i64::try_from(value).ok()))?;
+    let timestamp_seconds = values[0].as_i64().or_else(|| {
+        values[0]
+            .as_u64()
+            .and_then(|value| i64::try_from(value).ok())
+    })?;
     Some(ChartPoint {
         timestamp_ms: timestamp_seconds.saturating_mul(1000),
         open: parse_number(values.get(1))?,
