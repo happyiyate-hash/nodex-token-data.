@@ -32,7 +32,7 @@ impl MarketStore {
             .busy_timeout(Duration::from_secs(5))
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect_with(options)
             .await
             .context("Could not open NodeX market-data database")?;
@@ -64,6 +64,7 @@ impl MarketStore {
                 mint TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
                 timestamp_ms INTEGER NOT NULL,
+                close_timestamp_ms INTEGER NOT NULL,
                 open REAL NOT NULL,
                 high REAL NOT NULL,
                 low REAL NOT NULL,
@@ -91,12 +92,13 @@ impl MarketStore {
         for point in points {
             sqlx::query(
                 "INSERT INTO market_candles
-                 (mint, timeframe, timestamp_ms, open, high, low, close, volume, source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'historical_provider')
+                 (mint, timeframe, timestamp_ms, close_timestamp_ms, open, high, low, close, volume, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'historical_provider')
                  ON CONFLICT(mint, timeframe, timestamp_ms) DO NOTHING",
             )
             .bind(mint)
             .bind(timeframe)
+            .bind(point.timestamp_ms)
             .bind(point.timestamp_ms)
             .bind(point.open)
             .bind(point.high)
@@ -139,18 +141,20 @@ impl MarketStore {
                         let bucket = trade.timestamp_ms.div_euclid(interval_ms) * interval_ms;
                         sqlx::query(
                             "INSERT INTO market_candles
-                             (mint, timeframe, timestamp_ms, open, high, low, close, volume, source)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+                             (mint, timeframe, timestamp_ms, close_timestamp_ms, open, high, low, close, volume, source)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
                              ON CONFLICT(mint, timeframe, timestamp_ms) DO UPDATE SET
                                high = MAX(market_candles.high, excluded.high),
                                low = MIN(market_candles.low, excluded.low),
-                               close = excluded.close,
+                               close = CASE WHEN excluded.close_timestamp_ms >= market_candles.close_timestamp_ms THEN excluded.close ELSE market_candles.close END,
+                               close_timestamp_ms = MAX(market_candles.close_timestamp_ms, excluded.close_timestamp_ms),
                                volume = market_candles.volume + excluded.volume,
                                source = 'onchain'",
                         )
                         .bind(mint)
                         .bind(timeframe)
                         .bind(bucket)
+                        .bind(trade.timestamp_ms)
                         .bind(price)
                         .bind(price)
                         .bind(price)
@@ -214,7 +218,47 @@ fn candle_intervals() -> [(&'static str, i64); 6] {
 
 #[cfg(test)]
 mod tests {
-    use super::candle_intervals;
+    use super::{candle_intervals, MarketStore};
+    use crate::models::Trade;
+
+    #[test]
+    #[tokio::test]
+    async fn confirmed_trades_are_deduplicated_and_aggregate_candles() {
+        let store = MarketStore::connect("sqlite::memory:").await.unwrap();
+        let first = Trade {
+            signature: "sig-1".to_owned(),
+            side: "buy".to_owned(),
+            trader: Some("wallet-a".to_owned()),
+            amount_sol: None,
+            token_amount: Some(10.0),
+            price_usd: Some(2.0),
+            volume_usd: Some(20.0),
+            timestamp_ms: 120_000,
+        };
+        let second = Trade {
+            signature: "sig-2".to_owned(),
+            side: "sell".to_owned(),
+            trader: Some("wallet-b".to_owned()),
+            amount_sol: None,
+            token_amount: Some(5.0),
+            price_usd: Some(1.5),
+            volume_usd: Some(7.5),
+            timestamp_ms: 150_000,
+        };
+
+        assert!(store.record_confirmed_trade("mint-a", &first).await.unwrap());
+        assert!(!store.record_confirmed_trade("mint-a", &first).await.unwrap());
+        assert!(store.record_confirmed_trade("mint-a", &second).await.unwrap());
+
+        let candles = store.load_candles("mint-a", "1M", 10).await.unwrap();
+        assert_eq!(candles.len(), 1);
+        assert_eq!(candles[0].timestamp_ms, 120_000);
+        assert_eq!(candles[0].open, 2.0);
+        assert_eq!(candles[0].high, 2.0);
+        assert_eq!(candles[0].low, 1.5);
+        assert_eq!(candles[0].close, 1.5);
+        assert_eq!(candles[0].volume, 27.5);
+    }
 
     #[test]
     fn candle_intervals_are_consistent() {
