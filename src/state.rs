@@ -21,6 +21,11 @@ use crate::{
 };
 
 const MAX_ACTIVE_MARKET_MINTS: usize = 500;
+const STABLE_PROVIDER_CONNECTION: Duration = Duration::from_secs(60);
+
+fn should_reset_provider_backoff(connection_duration: Duration) -> bool {
+    connection_duration >= STABLE_PROVIDER_CONNECTION
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -276,11 +281,21 @@ impl AppState {
                 for endpoint in endpoints {
                     connected_attempt = true;
                     info!(provider, "Attempting provider WebSocket connection");
+                    let connected_at = Instant::now();
                     let result = match provider {
                         "helius" => crate::providers::helius_ws::run_once(&self, &endpoint).await,
                         "fluxrpc" => crate::providers::fluxrpc_ws::run_once(&self, &endpoint).await,
                         _ => continue,
                     };
+                    let connection_duration = connected_at.elapsed();
+                    if should_reset_provider_backoff(connection_duration) {
+                        retry_delay = Duration::from_secs(1);
+                        info!(
+                            provider,
+                            duration_seconds = connection_duration.as_secs(),
+                            "Provider connection was stable; resetting reconnect backoff"
+                        );
+                    }
                     if let Err(error) = result {
                         warn!(provider, error = %error, "Provider WebSocket ended; trying next configured endpoint");
                     }
@@ -319,6 +334,13 @@ mod tests {
             providers: Vec::new(),
         };
         AppState::new(&config).await.unwrap()
+    }
+
+    #[test]
+    fn provider_backoff_resets_only_after_stable_connection() {
+        assert!(!super::should_reset_provider_backoff(Duration::from_secs(59)));
+        assert!(super::should_reset_provider_backoff(Duration::from_secs(60)));
+        assert!(super::should_reset_provider_backoff(Duration::from_secs(120)));
     }
 
     #[tokio::test]
