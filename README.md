@@ -36,13 +36,14 @@ Connect to `/ws/tokens?ticket={ticket}`, then send:
 
 Supported topics:
 
-- `token.market`: price, market cap, percentage changes, liquidity, volume and buy/sell totals.
-- `token.chart`: live candle/point updates for the selected timeframe.
-- `token.trades`: confirmed buy/sell transactions.
-- `token.activity`: floating buy/sell activity beside the chart.
-- `token.holders`: holder count, largest holders and ownership concentration when refreshed by the indexer.
-- `token.info`: mutable on-chain token information.
-- `token.creator`: creator-related updates when a reliable source is available.
+- `token.market`: currently emits price, market cap, 5-minute/24-hour change, liquidity, 24-hour volume and transaction count when supplied by the selected DEX pair.
+- `token.chart`: reserved for candle updates; no publisher is connected yet.
+- `token.trades`: reserved for confirmed buy/sell transaction events; no decoder is connected yet.
+- `token.activity`: reserved for floating buy/sell activity; no publisher is connected yet.
+- `token.holders`: reserved for holder count, largest holders and ownership concentration; no indexer is connected yet.
+- `token.info` and `token.creator`: reserved for changes to verified metadata; no live publishers are connected yet.
+
+Only `token.market` currently emits live events. The other topics are accepted by the subscription protocol but remain silent until their data pipelines are implemented.
 
 Commands also include `unsubscribe` and `set_chart_timeframe`. The server acknowledges subscriptions and rejects unsupported topics/timeframes. A single multiplexed connection is used per Token Details session, not one physical socket per metric.
 
