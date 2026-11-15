@@ -64,7 +64,7 @@ impl TokenSnapshot {
             holders: HoldersSnapshot { total_count: None, top_10_ownership_pct: None, largest: Vec::new() },
             info: TokenInfo { decimals: None, total_supply: None, circulating_supply: None, token_standard: None, creator_address: None },
             data_status: DataStatus { identity: "unavailable", market: "unavailable", chart: "unavailable", trades: "unavailable", holders: "unavailable", info: "unavailable" },
-            as_of: format!("unix:{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()),
+            as_of: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             mint,
         }
     }
