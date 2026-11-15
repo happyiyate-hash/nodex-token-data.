@@ -16,6 +16,7 @@ use crate::models::ChartPoint;
 pub struct MarketDataClient {
     http: Client,
     chart_cache: Arc<Mutex<HashMap<String, (Instant, Vec<ChartPoint>)>>>,
+    trades_cache: Arc<Mutex<HashMap<String, (Instant, Vec<crate::models::Trade>)>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -42,6 +43,7 @@ impl MarketDataClient {
         Ok(Self {
             http,
             chart_cache: Arc::new(Mutex::new(HashMap::new())),
+            trades_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -195,6 +197,89 @@ impl MarketDataClient {
         }
         Ok(points)
     }
+
+    /// Retrieves recent pool swaps from GeckoTerminal. Amounts are reported
+    /// as token amounts; the counter-asset is not mislabeled as SOL.
+    pub async fn fetch_trades(&self, pool: &str) -> Result<Vec<crate::models::Trade>> {
+        let cache_key = pool.to_owned();
+        if let Ok(cache) = self.trades_cache.lock() {
+            if let Some((expires_at, trades)) = cache.get(&cache_key) {
+                if *expires_at > Instant::now() {
+                    return Ok(trades.clone());
+                }
+            }
+        }
+
+        let url = format!(
+            "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/trades"
+        );
+        let response = self
+            .http
+            .get(url)
+            .header("accept", "application/json;version=20230203")
+            .send()
+            .await
+            .map_err(|_| anyhow!("Recent-trades request failed or timed out"))?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Recent-trades provider returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|_| anyhow!("Recent-trades provider returned invalid JSON"))?;
+        let rows = payload
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Recent-trades response has no data list"))?;
+        let trades = rows
+            .iter()
+            .filter_map(parse_trade)
+            .collect::<Vec<_>>();
+
+        if let Ok(mut cache) = self.trades_cache.lock() {
+            cache.insert(
+                cache_key,
+                (Instant::now() + Duration::from_secs(60), trades.clone()),
+            );
+        }
+        Ok(trades)
+    }
+}
+
+fn parse_trade(row: &Value) -> Option<crate::models::Trade> {
+    let attributes = row.get("attributes")?;
+    let side = attributes.get("kind")?.as_str()?;
+    let token_amount = match side {
+        "buy" => parse_number(attributes.get("to_token_amount")),
+        "sell" => parse_number(attributes.get("from_token_amount")),
+        _ => None,
+    };
+    let price_usd = match side {
+        "buy" => parse_number(attributes.get("price_to_in_usd")),
+        "sell" => parse_number(attributes.get("price_from_in_usd")),
+        _ => None,
+    };
+    let timestamp = attributes.get("block_timestamp")?.as_str()?;
+    let timestamp_ms = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .ok()?
+        .timestamp_millis();
+
+    Some(crate::models::Trade {
+        signature: attributes.get("tx_hash")?.as_str()?.to_owned(),
+        side: side.to_owned(),
+        trader: attributes
+            .get("tx_from_address")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        amount_sol: None,
+        token_amount,
+        price_usd,
+        timestamp_ms,
+    })
 }
 
 fn chart_period(timeframe: &str) -> Option<(&'static str, u8, bool)> {
