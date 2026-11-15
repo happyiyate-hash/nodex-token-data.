@@ -64,6 +64,7 @@ impl MarketStore {
                 mint TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
                 timestamp_ms INTEGER NOT NULL,
+                open_timestamp_ms INTEGER NOT NULL,
                 close_timestamp_ms INTEGER NOT NULL,
                 open REAL NOT NULL,
                 high REAL NOT NULL,
@@ -92,12 +93,13 @@ impl MarketStore {
         for point in points {
             sqlx::query(
                 "INSERT INTO market_candles
-                 (mint, timeframe, timestamp_ms, close_timestamp_ms, open, high, low, close, volume, source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'historical_provider')
+                 (mint, timeframe, timestamp_ms, open_timestamp_ms, close_timestamp_ms, open, high, low, close, volume, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'historical_provider')
                  ON CONFLICT(mint, timeframe, timestamp_ms) DO NOTHING",
             )
             .bind(mint)
             .bind(timeframe)
+            .bind(point.timestamp_ms)
             .bind(point.timestamp_ms)
             .bind(point.timestamp_ms)
             .bind(point.open)
@@ -141,9 +143,11 @@ impl MarketStore {
                         let bucket = trade.timestamp_ms.div_euclid(interval_ms) * interval_ms;
                         sqlx::query(
                             "INSERT INTO market_candles
-                             (mint, timeframe, timestamp_ms, close_timestamp_ms, open, high, low, close, volume, source)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+                             (mint, timeframe, timestamp_ms, open_timestamp_ms, close_timestamp_ms, open, high, low, close, volume, source)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
                              ON CONFLICT(mint, timeframe, timestamp_ms) DO UPDATE SET
+                               open = CASE WHEN excluded.open_timestamp_ms < market_candles.open_timestamp_ms THEN excluded.open ELSE market_candles.open END,
+                               open_timestamp_ms = MIN(market_candles.open_timestamp_ms, excluded.open_timestamp_ms),
                                high = MAX(market_candles.high, excluded.high),
                                low = MIN(market_candles.low, excluded.low),
                                close = CASE WHEN excluded.close_timestamp_ms >= market_candles.close_timestamp_ms THEN excluded.close ELSE market_candles.close END,
@@ -154,6 +158,7 @@ impl MarketStore {
                         .bind(mint)
                         .bind(timeframe)
                         .bind(bucket)
+                        .bind(trade.timestamp_ms)
                         .bind(trade.timestamp_ms)
                         .bind(price)
                         .bind(price)
@@ -221,7 +226,6 @@ mod tests {
     use super::{candle_intervals, MarketStore};
     use crate::models::Trade;
 
-    #[test]
     #[tokio::test]
     async fn confirmed_trades_are_deduplicated_and_aggregate_candles() {
         let store = MarketStore::connect("sqlite::memory:").await.unwrap();
@@ -246,9 +250,9 @@ mod tests {
             timestamp_ms: 150_000,
         };
 
+        assert!(store.record_confirmed_trade("mint-a", &second).await.unwrap());
         assert!(store.record_confirmed_trade("mint-a", &first).await.unwrap());
         assert!(!store.record_confirmed_trade("mint-a", &first).await.unwrap());
-        assert!(store.record_confirmed_trade("mint-a", &second).await.unwrap());
 
         let candles = store.load_candles("mint-a", "1M", 10).await.unwrap();
         assert_eq!(candles.len(), 1);
