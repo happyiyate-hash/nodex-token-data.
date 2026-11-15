@@ -50,7 +50,10 @@ impl ProviderManager {
     /// Selects the next configured key for a provider using atomic round-robin
     /// rotation. Never log the returned URL because it contains credentials.
     pub fn next_endpoint(&self, provider_name: &str) -> Option<SelectedEndpoint> {
-        let pool = self.providers.iter().find(|pool| pool.name == provider_name)?;
+        let pool = self
+            .providers
+            .iter()
+            .find(|pool| pool.name == provider_name)?;
         let index = pool.cursor.fetch_add(1, Ordering::Relaxed) % pool.endpoints.len();
 
         Some(SelectedEndpoint {
