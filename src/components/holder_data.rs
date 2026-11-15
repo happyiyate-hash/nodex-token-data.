@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::{models::HoldersSnapshot, providers::ProviderClient};
+use anyhow::Result;
 
 pub async fn fetch(
     mint: &str,
@@ -7,5 +7,7 @@ pub async fn fetch(
     decimals: u8,
     providers: &ProviderClient,
 ) -> Result<HoldersSnapshot> {
-    providers.fetch_largest_holders(mint, total_supply_raw, decimals).await
+    providers
+        .fetch_largest_holders(mint, total_supply_raw, decimals)
+        .await
 }
