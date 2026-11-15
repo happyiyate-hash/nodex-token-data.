@@ -69,6 +69,7 @@ pub struct Trade {
     pub amount_sol: Option<f64>,
     pub token_amount: Option<f64>,
     pub price_usd: Option<f64>,
+    pub volume_usd: Option<f64>,
     pub timestamp_ms: i64,
 }
 
