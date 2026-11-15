@@ -72,6 +72,25 @@ impl MarketStore {
         )
         .execute(&pool)
         .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS market_candles (
+                mint TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                open_timestamp_ms INTEGER NOT NULL,
+                close_timestamp_ms INTEGER NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL NOT NULL,
+                source TEXT NOT NULL,
+                PRIMARY KEY (mint, timeframe, timestamp_ms)
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
         let candle_columns = sqlx::query("PRAGMA table_info(market_candles)")
             .fetch_all(&pool)
             .await?;
@@ -98,24 +117,6 @@ impl MarketStore {
                 .await?;
         }
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS market_candles (
-                mint TEXT NOT NULL,
-                timeframe TEXT NOT NULL,
-                timestamp_ms INTEGER NOT NULL,
-                open_timestamp_ms INTEGER NOT NULL,
-                close_timestamp_ms INTEGER NOT NULL,
-                open REAL NOT NULL,
-                high REAL NOT NULL,
-                low REAL NOT NULL,
-                close REAL NOT NULL,
-                volume REAL NOT NULL,
-                source TEXT NOT NULL,
-                PRIMARY KEY (mint, timeframe, timestamp_ms)
-            )",
-        )
-        .execute(&pool)
-        .await?;
 
         Ok(Self { pool })
     }
