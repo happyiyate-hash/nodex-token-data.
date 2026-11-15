@@ -98,10 +98,7 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
             }
 
             if program_line.ends_with(" success") || program_line.contains(" failed:") {
-                let completed = program_line
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or_default();
+                let completed = program_line.split_whitespace().next().unwrap_or_default();
                 if invocation_stack.last().copied() == Some(completed) {
                     invocation_stack.pop();
                 } else if let Some(position) = invocation_stack
