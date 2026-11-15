@@ -12,7 +12,10 @@ execute trades or create, modify, or close positions.
 - Environment-based configuration
 - Helius and FluxRPC provider endpoint configuration
 - Atomic round-robin API-key selection per provider
-- Health endpoint that reports provider configuration without exposing keys
+- Live, read-only Solana RPC connectivity checks using `getSlot`
+- Provider status endpoint that reports reachability, observed slot and latency
+- Provider priority follows configuration order: Helius first, FluxRPC second
+- Provider errors do not expose endpoint URLs or API keys
 - GitHub Actions CI for formatting, Clippy, tests, and release builds
 - Docker image for deployment
 
@@ -28,9 +31,13 @@ cargo run
 
 Health check: `GET http://localhost:8081/health`.
 
-The health endpoint reports whether providers are configured. It does not yet
-make live provider requests; provider connectivity checks and token-data
-features will be added in subsequent steps.
+Live provider check: `GET http://localhost:8081/providers/status`.
+
+The provider status endpoint sends a read-only `getSlot` request to every
+configured provider. It tries each configured key for that provider once,
+using round-robin key selection. It reports configured keys separately from
+actual connectivity. Provider order is preserved; configure Helius before
+FluxRPC to make Helius the primary provider and FluxRPC the fallback priority.
 
 ## Provider configuration
 
@@ -47,3 +54,11 @@ Never commit real API keys.
 GitHub Actions runs on pushes and pull requests targeting `main`. It checks
 formatting, runs Clippy with warnings denied, executes tests, and builds the
 release binary.
+
+## Not yet implemented
+
+- Public token/market-data REST endpoints
+- Backend API-key authentication and rate limiting
+- WebSocket routes, authenticated subscriptions and live streaming
+- Provider-specific token/account data workflows
+- Production TLS/reverse-proxy configuration and deployment verification
