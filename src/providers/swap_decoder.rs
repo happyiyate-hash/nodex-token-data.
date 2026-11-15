@@ -174,7 +174,7 @@ fn token_decimals(tx: &Value, mint: &str) -> Option<u8> {
     }
     None
 }
-fn quote_mint_from_tx(tx: &Value, base: &str) -> Option<&str> {
+fn quote_mint_from_tx<'a>(tx: &'a Value, base: &str) -> Option<&'a str> {
     for path in ["/meta/preTokenBalances", "/meta/postTokenBalances"] {
         if let Some(rows) = tx.pointer(path).and_then(Value::as_array) {
             for row in rows {
