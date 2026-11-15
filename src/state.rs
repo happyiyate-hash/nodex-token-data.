@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     config::AppConfig,
+    market::MarketDataClient,
     providers::{ProviderClient, ProviderManager},
     stream::StreamEvent,
 };
@@ -17,6 +18,7 @@ use crate::{
 pub struct AppState {
     pub providers: ProviderManager,
     pub provider_client: ProviderClient,
+    pub market_client: MarketDataClient,
     pub api_key: Arc<String>,
     pub tickets: Arc<Mutex<HashMap<String, Instant>>>,
     pub stream_tx: broadcast::Sender<StreamEvent>,
@@ -26,11 +28,13 @@ impl AppState {
     pub fn new(config: &AppConfig) -> Result<Self> {
         let providers = ProviderManager::new(&config.providers);
         let provider_client = ProviderClient::new(providers.clone())?;
+        let market_client = MarketDataClient::new()?;
         let (stream_tx, _) = broadcast::channel(2048);
 
         Ok(Self {
             providers,
             provider_client,
+            market_client,
             api_key: Arc::new(config.api_key.clone()),
             tickets: Arc::new(Mutex::new(HashMap::new())),
             stream_tx,
