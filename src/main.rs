@@ -35,6 +35,11 @@ async fn main() -> Result<()> {
     let config = AppConfig::from_env()?;
     let state = AppState::new(&config)?;
 
+    let market_stream_state = state.clone();
+    tokio::spawn(async move {
+        market_stream_state.run_market_stream().await;
+    });
+
     let protected = Router::new()
         .route("/providers/status", get(api::providers::status))
         .route(
