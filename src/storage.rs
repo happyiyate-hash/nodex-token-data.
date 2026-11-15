@@ -2,9 +2,8 @@ use std::{path::Path, str::FromStr, time::Duration};
 
 use anyhow::{Context, Result};
 use sqlx::{
-    Row,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    SqlitePool,
+    Row, SqlitePool,
 };
 
 use crate::models::{ChartPoint, Trade};
@@ -55,12 +54,16 @@ impl MarketStore {
         )
         .execute(&pool)
         .await?;
-        let trade_columns = sqlx::query("PRAGMA table_info(market_trades)").fetch_all(&pool).await?;
-        let has_amount_sol = trade_columns.iter().any(|row| {
-            row.try_get::<String, _>("name").ok().as_deref() == Some("amount_sol")
-        });
+        let trade_columns = sqlx::query("PRAGMA table_info(market_trades)")
+            .fetch_all(&pool)
+            .await?;
+        let has_amount_sol = trade_columns
+            .iter()
+            .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("amount_sol"));
         if !has_amount_sol {
-            sqlx::query("ALTER TABLE market_trades ADD COLUMN amount_sol REAL").execute(&pool).await?;
+            sqlx::query("ALTER TABLE market_trades ADD COLUMN amount_sol REAL")
+                .execute(&pool)
+                .await?;
         }
 
         sqlx::query(
@@ -191,9 +194,30 @@ impl MarketStore {
         let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64)>(
             "SELECT signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms FROM market_trades WHERE mint = ? ORDER BY timestamp_ms DESC LIMIT ?"
         ).bind(mint).bind(limit.clamp(1, 200)).fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|(signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms)| Trade {
-            signature, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    signature,
+                    side,
+                    trader,
+                    token_amount,
+                    amount_sol,
+                    price_usd,
+                    volume_usd,
+                    timestamp_ms,
+                )| Trade {
+                    signature,
+                    side,
+                    trader,
+                    token_amount,
+                    amount_sol,
+                    price_usd,
+                    volume_usd,
+                    timestamp_ms,
+                },
+            )
+            .collect())
     }
 
     pub async fn load_candles(
