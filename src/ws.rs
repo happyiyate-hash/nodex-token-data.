@@ -166,7 +166,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             break;
                         }
                     }
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        if send_json(&mut sender, json!({
+                            "event": "resync_required",
+                            "reason": "stream_lagged"
+                        })).await.is_err() {
+                            break;
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
