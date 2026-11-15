@@ -170,6 +170,22 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn publish_chart_snapshot(&self, mint: &str, timeframe: &str) -> Result<()> {
+        let quote = self.market_client.fetch_quote(mint).await.ok().flatten();
+        let pair = quote.as_ref().and_then(|value| value.pair_address.as_deref());
+        let points = crate::components::chart_data::fetch(
+            mint, timeframe, pair, &self.market_client, &self.market_store
+        ).await?;
+        let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap_or_default().as_millis() as u64;
+        let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        self.publish(StreamEvent {
+            event: "chart_snapshot".into(), mint: mint.into(), topic: "token.chart".into(),
+            sequence, timestamp_ms, data: serde_json::json!({"timeframe": timeframe, "points": points}),
+        });
+        Ok(())
+    }
+
     /// Helius is primary. FluxRPC is used after Helius fails or disconnects.
     pub async fn run_provider_streams(self) {
         loop {
