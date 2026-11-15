@@ -338,9 +338,15 @@ mod tests {
 
     #[test]
     fn provider_backoff_resets_only_after_stable_connection() {
-        assert!(!super::should_reset_provider_backoff(Duration::from_secs(59)));
-        assert!(super::should_reset_provider_backoff(Duration::from_secs(60)));
-        assert!(super::should_reset_provider_backoff(Duration::from_secs(120)));
+        assert!(!super::should_reset_provider_backoff(Duration::from_secs(
+            59
+        )));
+        assert!(super::should_reset_provider_backoff(Duration::from_secs(
+            60
+        )));
+        assert!(super::should_reset_provider_backoff(Duration::from_secs(
+            120
+        )));
     }
 
     #[tokio::test]
