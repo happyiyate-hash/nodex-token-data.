@@ -1,6 +1,6 @@
 mod api;
-mod config;
 mod components;
+mod config;
 mod market;
 mod middleware;
 mod models;
