@@ -218,5 +218,8 @@ where
     S: Sink<Message> + Unpin,
 {
     let text = serde_json::to_string(&value).map_err(|_| ())?;
-    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+    sender
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|_| ())
 }
