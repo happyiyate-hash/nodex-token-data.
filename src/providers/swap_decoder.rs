@@ -209,7 +209,7 @@ mod tests {
         b[56] = 1;
         b[57..89].copy_from_slice(&[2; 32]);
         b[89..97].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
-        let logs = vec![
+        let logs = [
             format!("Program {PUMP} invoke [1]"),
             format!("Program data: {}", STANDARD.encode(b)),
         ];
