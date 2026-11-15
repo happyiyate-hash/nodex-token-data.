@@ -115,3 +115,41 @@ fn transaction_count(pair: &Value) -> Option<u64> {
     let sells = pair.pointer("/txns/h24/sells").and_then(Value::as_u64)?;
     Some(buys.saturating_add(sells))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_numeric_strings_and_json_numbers() {
+        assert_eq!(parse_number(Some(&Value::String("12.5".to_owned()))), Some(12.5));
+        assert_eq!(parse_number(Some(&json!(7.25))), Some(7.25));
+        assert_eq!(parse_number(Some(&Value::Null)), None);
+    }
+
+    #[test]
+    fn sums_verified_buy_and_sell_counts() {
+        let pair = json!({
+            "txns": {
+                "h24": {
+                    "buys": 12,
+                    "sells": 8
+                }
+            }
+        });
+        assert_eq!(transaction_count(&pair), Some(20));
+    }
+
+    #[test]
+    fn missing_transaction_counts_stay_unavailable() {
+        let pair = json!({ "txns": { "h24": { "buys": 12 } } });
+        assert_eq!(transaction_count(&pair), None);
+    }
+
+    #[tokio::test]
+    async fn rejects_more_than_thirty_addresses_before_network_access() {
+        let client = MarketDataClient::new().unwrap();
+        let mints = vec!["mint".to_owned(); 31];
+        assert!(client.fetch_quotes(&mints).await.is_err());
+    }
+}
