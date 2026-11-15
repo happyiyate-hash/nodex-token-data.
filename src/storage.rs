@@ -418,9 +418,18 @@ mod tests {
             timestamp_ms: 121_000,
         };
 
-        assert!(store.record_confirmed_trade("mint-a", &first).await.unwrap());
-        assert!(store.record_confirmed_trade("mint-a", &second).await.unwrap());
-        assert!(!store.record_confirmed_trade("mint-a", &first).await.unwrap());
+        assert!(store
+            .record_confirmed_trade("mint-a", &first)
+            .await
+            .unwrap());
+        assert!(store
+            .record_confirmed_trade("mint-a", &second)
+            .await
+            .unwrap());
+        assert!(!store
+            .record_confirmed_trade("mint-a", &first)
+            .await
+            .unwrap());
 
         let trades = store.load_recent_trades("mint-a", 10).await.unwrap();
         assert_eq!(trades.len(), 2);
