@@ -5,6 +5,7 @@ mod market;
 mod models;
 mod providers;
 mod state;
+mod storage;
 mod stream;
 mod ws;
 
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
-    let state = AppState::new(&config)?;
+    let state = AppState::new(&config).await?;
 
     let market_stream_state = state.clone();
     tokio::spawn(async move {
