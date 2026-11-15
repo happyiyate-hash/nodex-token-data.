@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -6,9 +10,12 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
 
+use crate::models::ChartPoint;
+
 #[derive(Clone)]
 pub struct MarketDataClient {
     http: Client,
+    chart_cache: Arc<Mutex<HashMap<String, (Instant, Vec<ChartPoint>)>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -29,10 +36,13 @@ pub struct MarketQuote {
 impl MarketDataClient {
     pub fn new() -> Result<Self> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(8))
+            .timeout(Duration::from_secs(8))
             .user_agent("NodeX-Token-Data/0.1")
             .build()?;
-        Ok(Self { http })
+        Ok(Self {
+            http,
+            chart_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     /// Uses the public DexScreener token-pairs endpoint. Requests can contain
@@ -126,6 +136,123 @@ impl MarketDataClient {
             }
         }
     }
+
+    /// Retrieves historical OHLCV from GeckoTerminal. Its public API is
+    /// cached upstream for one minute and limited to approximately 10 calls
+    /// per minute, so this client also caches each pool/timeframe for 60s.
+    pub async fn fetch_chart(&self, pool: &str, timeframe: &str) -> Result<Vec<ChartPoint>> {
+        let Some((period, aggregate, resample_30m)) = chart_period(timeframe) else {
+            return Ok(Vec::new());
+        };
+        let cache_key = format!("{pool}:{timeframe}");
+        if let Ok(cache) = self.chart_cache.lock() {
+            if let Some((expires_at, points)) = cache.get(&cache_key) {
+                if *expires_at > Instant::now() {
+                    return Ok(points.clone());
+                }
+            }
+        }
+
+        let url = format!(
+            "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/{period}?aggregate={aggregate}&limit=100&currency=usd&token=base"
+        );
+        let response = self
+            .http
+            .get(url)
+            .header("accept", "application/json;version=20230203")
+            .send()
+            .await
+            .map_err(|_| anyhow!("Chart-history request failed or timed out"))?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Chart-history provider returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|_| anyhow!("Chart-history provider returned invalid JSON"))?;
+        let rows = payload
+            .pointer("/data/attributes/ohlcv_list")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Chart-history response has no OHLCV list"))?;
+        let mut points = rows
+            .iter()
+            .filter_map(parse_chart_point)
+            .collect::<Vec<_>>();
+        points.sort_by_key(|point| point.timestamp_ms);
+
+        if resample_30m {
+            points = aggregate_30m(points);
+        }
+        if let Ok(mut cache) = self.chart_cache.lock() {
+            cache.insert(
+                cache_key,
+                (Instant::now() + Duration::from_secs(60), points.clone()),
+            );
+        }
+        Ok(points)
+    }
+}
+
+fn chart_period(timeframe: &str) -> Option<(&'static str, u8, bool)> {
+    match timeframe {
+        "1M" => Some(("minute", 1, false)),
+        "5M" => Some(("minute", 5, false)),
+        "15M" => Some(("minute", 15, false)),
+        "30M" => Some(("minute", 15, true)),
+        "1H" => Some(("hour", 1, false)),
+        "24H" => Some(("day", 1, false)),
+        _ => None,
+    }
+}
+
+fn parse_chart_point(row: &Value) -> Option<ChartPoint> {
+    let values = row.as_array()?;
+    if values.len() < 6 {
+        return None;
+    }
+    let timestamp_seconds = values[0]
+        .as_i64()
+        .or_else(|| values[0].as_u64().and_then(|value| i64::try_from(value).ok()))?;
+    Some(ChartPoint {
+        timestamp_ms: timestamp_seconds.saturating_mul(1000),
+        open: parse_number(values.get(1))?,
+        high: parse_number(values.get(2))?,
+        low: parse_number(values.get(3))?,
+        close: parse_number(values.get(4))?,
+        volume: parse_number(values.get(5))?,
+    })
+}
+
+fn aggregate_30m(points: Vec<ChartPoint>) -> Vec<ChartPoint> {
+    const BUCKET_MS: i64 = 30 * 60 * 1000;
+    let mut buckets: BTreeMap<i64, ChartPoint> = BTreeMap::new();
+
+    for point in points {
+        let bucket = point.timestamp_ms.div_euclid(BUCKET_MS) * BUCKET_MS;
+        match buckets.get_mut(&bucket) {
+            Some(current) => {
+                current.high = current.high.max(point.high);
+                current.low = current.low.min(point.low);
+                current.close = point.close;
+                current.volume += point.volume;
+            }
+            None => {
+                buckets.insert(
+                    bucket,
+                    ChartPoint {
+                        timestamp_ms: bucket,
+                        ..point
+                    },
+                );
+            }
+        }
+    }
+
+    buckets.into_values().collect()
 }
 
 fn parse_number(value: Option<&Value>) -> Option<f64> {
@@ -174,6 +301,51 @@ mod tests {
     fn missing_transaction_counts_stay_unavailable() {
         let pair = json!({ "txns": { "h24": { "buys": 12 } } });
         assert_eq!(transaction_count(&pair), None);
+    }
+
+    #[test]
+    fn maps_supported_chart_timeframes_without_fabricating_second_candles() {
+        assert_eq!(chart_period("1M"), Some(("minute", 1, false)));
+        assert_eq!(chart_period("30M"), Some(("minute", 15, true)));
+        assert_eq!(chart_period("1S"), None);
+    }
+
+    #[test]
+    fn parses_geckoterminal_ohlcv_rows() {
+        let row = json!([1_700_000_000, "1.0", "2.0", "0.5", "1.5", "1000"]);
+        let point = parse_chart_point(&row).unwrap();
+        assert_eq!(point.timestamp_ms, 1_700_000_000_000);
+        assert_eq!(point.close, 1.5);
+        assert_eq!(point.volume, 1000.0);
+    }
+
+    #[test]
+    fn aggregates_fifteen_minute_points_into_thirty_minute_candles() {
+        let points = vec![
+            ChartPoint {
+                timestamp_ms: 1_700_000_000_000,
+                open: 1.0,
+                high: 1.5,
+                low: 0.8,
+                close: 1.2,
+                volume: 10.0,
+            },
+            ChartPoint {
+                timestamp_ms: 1_700_000_900_000,
+                open: 1.2,
+                high: 1.8,
+                low: 1.1,
+                close: 1.7,
+                volume: 20.0,
+            },
+        ];
+        let aggregated = aggregate_30m(points);
+        assert_eq!(aggregated.len(), 1);
+        assert_eq!(aggregated[0].open, 1.0);
+        assert_eq!(aggregated[0].high, 1.8);
+        assert_eq!(aggregated[0].low, 0.8);
+        assert_eq!(aggregated[0].close, 1.7);
+        assert_eq!(aggregated[0].volume, 30.0);
     }
 
     #[tokio::test]
