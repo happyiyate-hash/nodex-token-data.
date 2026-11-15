@@ -63,20 +63,21 @@ Implemented:
 - Helius/FluxRPC endpoint configuration and per-provider key rotation.
 - Read-only provider `getSlot` checks.
 - API-key middleware for protected REST endpoints.
-- Token snapshot response schema and route.
+- Token snapshot response schema and route, including live `getTokenSupply` and `getAccountInfo` retrieval with Helius-first / FluxRPC fallback.
+- Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and creator authority when returned).
 - Short-lived, single-use WebSocket tickets.
 - Authenticated WebSocket handshake, topic subscription acknowledgements, unsubscribe and chart-timeframe command.
 - In-process broadcast event bus for provider/indexer workers to publish typed topic events.
 - CI checks for format, Clippy, tests and release build.
 
 Not yet implemented:
-- Actual provider-backed token metadata, price/market-cap calculation, trade decoding, OHLCV history and holder indexing.
-- Provider failover for real token-data operations (the current status route checks providers independently).
+- Price/market-cap calculation, trade decoding, OHLCV history and holder indexing.
+- Metadata enrichment when Helius DAS is not configured or does not return asset metadata.
 - A persistent event/indexing pipeline and event producers. The WebSocket currently provides the subscription transport; no live market events are emitted until those workers are connected.
 - Durable historical storage, retention and candle aggregation.
 - Production deployment and TLS verification.
 
-**Important:** The current snapshot deliberately returns unavailable/null fields. The API and transport foundation is in place, but this is not yet live token data. Do not present it as production market data.
+**Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market values, charts, trades and holders still return unavailable/null values until their data sources, indexers and persistence are implemented. Do not present this as a complete or production-ready market-data service.
 
 ## Configuration
 
