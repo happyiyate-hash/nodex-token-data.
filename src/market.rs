@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Result};
@@ -160,37 +160,79 @@ impl MarketDataClient {
             }
         }
 
-        self.wait_for_gecko_slot().await;
-        let url = format!(
-            "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/{period}?aggregate={aggregate}&limit=100&currency=usd&token=base"
-        );
-        let response = self
-            .http
-            .get(url)
-            .header("accept", "application/json;version=20230203")
-            .send()
-            .await
-            .map_err(|_| anyhow!("Chart-history request failed or timed out"))?;
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "Chart-history provider returned HTTP {}",
-                response.status().as_u16()
-            ));
+        const HISTORY_WINDOW_SECONDS: u64 = 48 * 60 * 60;
+        const PAGE_LIMIT: usize = 1000;
+        const MAX_HISTORY_PAGES: usize = 4;
+        let now_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let cutoff_ms = now_seconds
+            .saturating_sub(HISTORY_WINDOW_SECONDS)
+            .saturating_mul(1000) as i64;
+        let mut before_timestamp: Option<i64> = None;
+        let mut points = Vec::new();
+
+        for _ in 0..MAX_HISTORY_PAGES {
+            self.wait_for_gecko_slot().await;
+            let mut url = format!(
+                "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/{period}?aggregate={aggregate}&limit={PAGE_LIMIT}&currency=usd&token=base"
+            );
+            if let Some(timestamp) = before_timestamp {
+                url.push_str(&format!("&before_timestamp={timestamp}"));
+            }
+
+            let response = self
+                .http
+                .get(url)
+                .header("accept", "application/json;version=20230203")
+                .send()
+                .await
+                .map_err(|_| anyhow!("Chart-history request failed or timed out"))?;
+            if !response.status().is_success() {
+                return Err(anyhow!(
+                    "Chart-history provider returned HTTP {}",
+                    response.status().as_u16()
+                ));
+            }
+
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|_| anyhow!("Chart-history provider returned invalid JSON"))?;
+            let rows = payload
+                .pointer("/data/attributes/ohlcv_list")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("Chart-history response has no OHLCV list"))?;
+            let page_points = rows
+                .iter()
+                .filter_map(parse_chart_point)
+                .collect::<Vec<_>>();
+            if page_points.is_empty() {
+                break;
+            }
+
+            let oldest_timestamp_ms = page_points
+                .iter()
+                .map(|point| point.timestamp_ms)
+                .min()
+                .unwrap_or_default();
+            let page_is_full = rows.len() >= PAGE_LIMIT;
+            points.extend(page_points);
+
+            if oldest_timestamp_ms <= cutoff_ms || !page_is_full {
+                break;
+            }
+
+            let next_cursor = oldest_timestamp_ms.div_euclid(1000).saturating_sub(1);
+            if before_timestamp.is_some_and(|previous| next_cursor >= previous) {
+                break;
+            }
+            before_timestamp = Some(next_cursor);
         }
 
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|_| anyhow!("Chart-history provider returned invalid JSON"))?;
-        let rows = payload
-            .pointer("/data/attributes/ohlcv_list")
-            .and_then(Value::as_array)
-            .ok_or_else(|| anyhow!("Chart-history response has no OHLCV list"))?;
-        let mut points = rows
-            .iter()
-            .filter_map(parse_chart_point)
-            .collect::<Vec<_>>();
         points.sort_by_key(|point| point.timestamp_ms);
+        points.dedup_by_key(|point| point.timestamp_ms);
 
         if resample_30m {
             points = aggregate_30m(points);
