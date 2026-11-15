@@ -290,7 +290,10 @@ impl AppState {
             if !connected_attempt {
                 warn!("No provider WebSocket endpoints are configured");
             } else {
-                warn!(delay_seconds = retry_delay.as_secs(), "All provider WebSocket attempts ended; retrying from primary");
+                warn!(
+                    delay_seconds = retry_delay.as_secs(),
+                    "All provider WebSocket attempts ended; retrying from primary"
+                );
             }
             tokio::time::sleep(retry_delay).await;
             retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);

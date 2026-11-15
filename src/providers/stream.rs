@@ -4,11 +4,14 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
+    sync::Arc,
     time::{Duration, Instant},
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
+const MAX_CONCURRENT_TRANSACTION_FETCHES: usize = 32;
 const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(2);
 const SUBSCRIPTION_ACK_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -24,6 +27,9 @@ pub async fn run_connection(
         .with_context(|| format!("{provider} WebSocket connection failed"))?;
     info!(provider, "Solana provider WebSocket connected");
 
+    // Bound in-flight transaction RPC calls so a burst of logs cannot create
+    // an unbounded number of detached tasks.
+    let fetch_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_TRANSACTION_FETCHES));
     let mut request_id = 1_u64;
     let mut pending = HashMap::<u64, (String, Instant)>::new();
     let mut subscription_to_mint = HashMap::<u64, String>::new();
@@ -147,10 +153,26 @@ pub async fn run_connection(
                             continue;
                         };
                         let logs = value.get("logs").and_then(Value::as_array).cloned().unwrap_or_default();
+                        let permit = match acquire_fetch_permit(&fetch_slots) {
+                            Ok(permit) => permit,
+                            Err(error) => {
+                                warn!(
+                                    provider,
+                                    mint,
+                                    signature,
+                                    limit = MAX_CONCURRENT_TRANSACTION_FETCHES,
+                                    error = %error,
+                                    "Transaction fetch capacity exhausted; closing provider stream to prevent unbounded task growth"
+                                );
+                                return Err(error);
+                            }
+                        };
                         let state = state.clone();
                         let mint = mint.clone();
                         let signature = signature.to_owned();
                         tokio::spawn(async move {
+                            // The permit is released automatically when this task exits.
+                            let _permit = permit;
                             match state.provider_client.fetch_transaction(&signature).await {
                                 Ok(transaction) => {
                                     if let Some(trade) = super::swap_decoder::decode_trade(
@@ -175,5 +197,41 @@ pub async fn run_connection(
                 }
             }
         }
+    }
+}
+
+
+fn acquire_fetch_permit(
+    semaphore: &Arc<Semaphore>,
+) -> Result<OwnedSemaphorePermit> {
+    semaphore
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| anyhow!("maximum concurrent transaction fetches reached"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{acquire_fetch_permit, MAX_CONCURRENT_TRANSACTION_FETCHES};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    #[test]
+    fn transaction_fetch_concurrency_is_bounded_and_permits_are_released() {
+        let semaphore = Arc::new(Semaphore::new(2));
+        let first = acquire_fetch_permit(&semaphore).unwrap();
+        let second = acquire_fetch_permit(&semaphore).unwrap();
+
+        assert!(acquire_fetch_permit(&semaphore).is_err());
+        drop(first);
+
+        assert!(acquire_fetch_permit(&semaphore).is_ok());
+        drop(second);
+    }
+
+    #[test]
+    fn configured_fetch_limit_is_positive_and_bounded() {
+        assert_eq!(MAX_CONCURRENT_TRANSACTION_FETCHES, 32);
+        assert!(MAX_CONCURRENT_TRANSACTION_FETCHES > 0);
     }
 }
