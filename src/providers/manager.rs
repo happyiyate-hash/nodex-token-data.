@@ -45,7 +45,6 @@ impl ProviderManager {
         let p = self.providers.iter().find(|p| p.name == name)?;
         let i = p.cursor.fetch_add(1, Ordering::Relaxed) % p.endpoints.len();
         Some(SelectedEndpoint {
-            provider: p.name,
             url: p.endpoints[i].clone(),
         })
     }
