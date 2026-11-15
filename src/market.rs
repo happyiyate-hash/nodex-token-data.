@@ -273,7 +273,11 @@ fn store_cache<T: Clone>(
     cache.retain(|_, (expires_at, _)| *expires_at > now);
 
     if cache.len() >= MAX_CACHE_ENTRIES {
-        if let Some(evicted_key) = cache.keys().find(|candidate| *candidate != &key).cloned() {
+        let evicted_key = cache
+            .keys()
+            .find(|candidate| *candidate != &key)
+            .cloned();
+        if let Some(evicted_key) = evicted_key {
             cache.remove(&evicted_key);
         }
     }
