@@ -26,7 +26,7 @@ pub async fn decode_trade(
     market: &MarketDataClient,
 ) -> Option<Trade> {
     let lines = logs.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-    let event = decode_event(&lines, mint)?;
+    let event = decode_event(&lines, mint, tx)?;
     let decimals = token_decimals(tx, mint)?;
     let token_amount = event.base as f64 / 10_f64.powi(decimals as i32);
     if token_amount <= 0.0 || !token_amount.is_finite() {
@@ -85,10 +85,11 @@ pub async fn decode_trade(
     })
 }
 
-fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
+fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
     // Solana transaction logs are nested. Only accept Program data emitted
     // while the corresponding DEX program is the current invocation.
     let mut invocation_stack = Vec::<&str>::new();
+    let mut candidates = Vec::new();
 
     for line in logs {
         if let Some(program_line) = line.strip_prefix("Program ") {
@@ -149,7 +150,7 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
                 _ => (WSOL.to_owned(), sol_raw),
             };
             let sol = (quote_mint == WSOL).then_some(quote_raw as f64 / 1e9);
-            return Some(Swap {
+            candidates.push(Swap {
                 side: if bytes[56] == 1 { "buy" } else { "sell" },
                 trader: bs58::encode(trader_bytes).into_string(),
                 base,
@@ -158,6 +159,7 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
                 sol,
                 time,
             });
+            continue;
         }
 
         if program == PUMP_SWAP {
@@ -179,7 +181,7 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
             let Some(time) = read_i64(&bytes, 8) else {
                 continue;
             };
-            return Some(Swap {
+            candidates.push(Swap {
                 side: if buy { "buy" } else { "sell" },
                 trader: bs58::encode(trader_bytes).into_string(),
                 base,
@@ -190,8 +192,59 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
             });
         }
     }
-    None
+
+    // PumpSwap events do not carry the base mint. Attribute an event only when
+    // its trader's confirmed token-balance delta exactly matches the event's
+    // base amount. Ambiguous or incomplete balance metadata is rejected.
+    let mut matched = candidates
+        .into_iter()
+        .filter(|event| token_balance_delta(tx, mint, &event.trader) == expected_token_delta(event));
+    let event = matched.next()?;
+    if matched.next().is_some() {
+        return None;
+    }
+    Some(event)
 }
+
+fn expected_token_delta(event: &Swap) -> Option<i128> {
+    let amount = i128::from(event.base);
+    match event.side {
+        "buy" => Some(amount),
+        "sell" => Some(-amount),
+        _ => None,
+    }
+}
+
+fn token_balance_delta(tx: &Value, mint: &str, owner: &str) -> Option<i128> {
+    fn total(tx: &Value, path: &str, mint: &str, owner: &str) -> Option<u128> {
+        let rows = tx.pointer(path)?.as_array()?;
+        let mut found = false;
+        let mut sum = 0_u128;
+        for row in rows {
+            if row.get("mint").and_then(Value::as_str) != Some(mint)
+                || row.get("owner").and_then(Value::as_str) != Some(owner)
+            {
+                continue;
+            }
+            found = true;
+            let amount = row.pointer("/uiTokenAmount/amount")?.as_str()?.parse::<u128>().ok()?;
+            sum = sum.checked_add(amount)?;
+        }
+        found.then_some(sum)
+    }
+
+    let before = total(tx, "/meta/preTokenBalances", mint, owner).unwrap_or(0);
+    let after = total(tx, "/meta/postTokenBalances", mint, owner).unwrap_or(0);
+    if before == 0 && after == 0 {
+        return None;
+    }
+    if after >= before {
+        i128::try_from(after - before).ok()
+    } else {
+        i128::try_from(before - after).ok().map(|delta| -delta)
+    }
+}
+
 fn decode_pump_quote(bytes: &[u8]) -> Option<(String, u64)> {
     // TradeEvent's quote fields follow the Borsh ix_name string, mode/fee
     // fields and variable-length shareholders vector.
@@ -265,7 +318,8 @@ mod tests {
             "Program SomeOtherProgram111111111111111111111111111 success".to_owned(),
         ];
         let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
-        assert!(decode_event(&refs, &bs58::encode([1; 32]).into_string()).is_none());
+        let mint = bs58::encode([1; 32]).into_string();
+        assert!(decode_event(&refs, &mint, &Value::Null).is_none());
     }
 
     #[test]
@@ -283,7 +337,12 @@ mod tests {
             format!("Program data: {}", STANDARD.encode(b)),
         ];
         let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
-        let event = decode_event(&refs, &bs58::encode([1; 32]).into_string()).unwrap();
+        let mint = bs58::encode([1; 32]).into_string();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": bs58::encode([2; 32]).into_string(), "uiTokenAmount": {"amount": "0"}}],
+            "postTokenBalances": [{"mint": mint, "owner": bs58::encode([2; 32]).into_string(), "uiTokenAmount": {"amount": "2000000"}}]
+        }});
+        let event = decode_event(&refs, &mint, &tx).unwrap();
         assert_eq!(event.side, "buy");
         assert_eq!(event.base, 2_000_000);
     }
