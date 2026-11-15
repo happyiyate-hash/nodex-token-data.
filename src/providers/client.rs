@@ -127,6 +127,48 @@ impl ProviderClient {
         })
     }
 
+    pub async fn fetch_transaction(&self, signature: &str) -> Result<Value> {
+        self.request_rpc("getTransaction", json!([signature, {
+            "encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0
+        }])).await
+    }
+
+    /// Returns the largest 20 token accounts. This RPC method does not expose
+    /// the complete holder population, so total_count deliberately remains unknown.
+    pub async fn fetch_largest_holders(&self, mint: &str, supply_raw: &str, decimals: u8) -> Result<crate::models::HoldersSnapshot> {
+        let response = self.request_rpc("getTokenLargestAccounts", json!([mint, {"commitment":"confirmed"}])).await?;
+        let rows = response.get("value").and_then(Value::as_array).ok_or_else(|| anyhow!("Largest-holder response missing values"))?;
+        let addresses = rows.iter().filter_map(|row| row.get("address").and_then(Value::as_str)).map(ToOwned::to_owned).collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Ok(crate::models::HoldersSnapshot { total_count: None, top_10_ownership_pct: None, largest: Vec::new() });
+        }
+        let accounts = self.request_rpc("getMultipleAccounts", json!([addresses, {"encoding":"jsonParsed","commitment":"confirmed"}])).await?;
+        let values = accounts.get("value").and_then(Value::as_array).cloned().unwrap_or_default();
+        let supply = supply_raw.parse::<f64>().unwrap_or(0.0) / 10_f64.powi(decimals as i32);
+        let mut holders = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            let Some(token_account) = row.get("address").and_then(Value::as_str) else { continue; };
+            let Some(owner) = values.get(index).and_then(|v| v.pointer("/data/parsed/info/owner")).and_then(Value::as_str) else { continue; };
+            let amount = row.get("uiAmountString").and_then(Value::as_str).and_then(|v| v.parse::<f64>().ok())
+                .or_else(|| row.get("amount").and_then(Value::as_str).and_then(|v| v.parse::<f64>().ok()).map(|v| v / 10_f64.powi(decimals as i32))).unwrap_or(0.0);
+            if amount <= 0.0 || !amount.is_finite() { continue; }
+            holders.push(crate::models::Holder {
+                address: owner.to_owned(), token_account: Some(token_account.to_owned()), token_amount: amount,
+                supply_pct: (supply > 0.0).then_some(amount / supply * 100.0), rank: (holders.len() + 1) as u32,
+            });
+        }
+        let top = holders.iter().take(10).map(|h| h.token_amount).sum::<f64>();
+        Ok(crate::models::HoldersSnapshot {
+            total_count: None, top_10_ownership_pct: (supply > 0.0).then_some(top / supply * 100.0), largest: holders,
+        })
+    }
+
+    pub async fn fetch_mint_created_at(&self, mint: &str) -> Result<Option<String>> {
+        let response = self.request_rpc("getSignaturesForAddress", json!([mint, {"limit":1000,"commitment":"confirmed"}])).await?;
+        let earliest = response.as_array().into_iter().flatten().filter_map(|row| row.get("blockTime").and_then(Value::as_i64)).min();
+        Ok(earliest.and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0)).map(|time| time.to_rfc3339()))
+    }
+
     async fn fetch_helius_asset(&self, mint: &str) -> Result<Value> {
         if self.manager.configured_key_count("helius") == 0 {
             return Err(anyhow!("Helius DAS is not configured"));
