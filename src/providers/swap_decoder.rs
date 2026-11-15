@@ -103,8 +103,10 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
                 continue;
             }
             let sol_raw = read_u64(&bytes, 40)?;
-            let (quote_mint, quote_raw) =
-                decode_pump_quote(&bytes).unwrap_or((WSOL.to_owned(), sol_raw));
+            let (quote_mint, quote_raw) = match decode_pump_quote(&bytes) {
+                Some((mint, amount)) if mint != "11111111111111111111111111111111" && amount > 0 => (mint, amount),
+                _ => (WSOL.to_owned(), sol_raw),
+            };
             let sol = (quote_mint == WSOL).then_some(quote_raw as f64 / 1e9);
             return Some(Swap {
                 side: if bytes[56] == 1 { "buy" } else { "sell" },
