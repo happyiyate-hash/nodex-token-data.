@@ -38,6 +38,11 @@ async fn main() -> Result<()> {
         market_stream_state.run_market_stream().await;
     });
 
+    let holder_stream_state = state.clone();
+    tokio::spawn(async move {
+        holder_stream_state.run_holder_stream().await;
+    });
+
     let provider_stream_state = state.clone();
     tokio::spawn(async move {
         provider_stream_state.run_provider_streams().await;
