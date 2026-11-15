@@ -83,7 +83,7 @@ Not yet implemented:
 
 ## Market data source
 
-The first market-data adapter uses the public DexScreener Solana token-pairs endpoint. The adapter batches up to 30 mint addresses per request and selects the highest-liquidity pair where the requested mint is the base token. The upstream API documents a 300-request/minute limit for this endpoint. The service polls active subscriptions every five seconds; this is suitable for an initial private/testing data layer, not a guaranteed sub-second feed. A dedicated paid streaming provider can be added later behind the same market-data interface if the required latency and budget justify it.
+The first market-data adapter uses the public DexScreener Solana token-pairs endpoint. The adapter batches up to 30 mint addresses per request and selects the highest-liquidity pair where the requested mint is the base token. The upstream API documents a 300-request/minute limit for this endpoint. The service polls active subscriptions every five seconds, batches up to 30 mints per request, and caps the number of unique active mints at 500. At that cap, one full poll cycle uses at most 17 requests (about 204 requests/minute before snapshot lookups), below the documented endpoint limit. This is suitable for an initial private/testing data layer, not a guaranteed sub-second feed. A dedicated paid streaming provider can be added later behind the same market-data interface if the required latency and budget justify it.
 
 ## Configuration
 
