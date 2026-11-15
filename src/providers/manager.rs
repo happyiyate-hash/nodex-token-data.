@@ -10,14 +10,12 @@ pub struct ProviderManager {
     providers: Arc<Vec<ProviderPool>>,
 }
 
-#[allow(dead_code)]
 struct ProviderPool {
     name: &'static str,
     endpoints: Vec<String>,
     cursor: AtomicUsize,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SelectedEndpoint {
     pub provider: &'static str,
@@ -31,6 +29,8 @@ pub struct ProviderStatus {
 }
 
 impl ProviderManager {
+    /// Provider configuration order defines priority. Configure Helius first
+    /// and FluxRPC second to make Helius primary and FluxRPC the fallback.
     pub fn new(configs: &[ProviderConfig]) -> Self {
         let providers = configs
             .iter()
@@ -48,20 +48,26 @@ impl ProviderManager {
     }
 
     /// Selects the next configured key for a provider using atomic round-robin
-    /// rotation. Callers should avoid logging the returned URL because it
-    /// contains the provider credential.
-    #[allow(dead_code)]
+    /// rotation. Never log the returned URL because it contains credentials.
     pub fn next_endpoint(&self, provider_name: &str) -> Option<SelectedEndpoint> {
-        let pool = self
-            .providers
-            .iter()
-            .find(|pool| pool.name == provider_name)?;
+        let pool = self.providers.iter().find(|pool| pool.name == provider_name)?;
         let index = pool.cursor.fetch_add(1, Ordering::Relaxed) % pool.endpoints.len();
 
         Some(SelectedEndpoint {
             provider: pool.name,
             url: pool.endpoints[index].clone(),
         })
+    }
+
+    pub fn provider_names(&self) -> Vec<&'static str> {
+        self.providers.iter().map(|pool| pool.name).collect()
+    }
+
+    pub fn configured_key_count(&self, provider_name: &str) -> usize {
+        self.providers
+            .iter()
+            .find(|pool| pool.name == provider_name)
+            .map_or(0, |pool| pool.endpoints.len())
     }
 
     pub fn statuses(&self) -> Vec<ProviderStatus> {
@@ -99,5 +105,21 @@ mod tests {
     fn unknown_provider_returns_none() {
         let manager = ProviderManager::new(&[]);
         assert!(manager.next_endpoint("helius").is_none());
+    }
+
+    #[test]
+    fn preserves_provider_priority() {
+        let manager = ProviderManager::new(&[
+            ProviderConfig {
+                name: "helius",
+                endpoints: vec!["helius-key".into()],
+            },
+            ProviderConfig {
+                name: "fluxrpc",
+                endpoints: vec!["flux-key".into()],
+            },
+        ]);
+
+        assert_eq!(manager.provider_names(), vec!["helius", "fluxrpc"]);
     }
 }
