@@ -18,6 +18,8 @@ use crate::{
     stream::StreamEvent,
 };
 
+const MAX_ACTIVE_MARKET_MINTS: usize = 500;
+
 #[derive(Clone)]
 pub struct AppState {
     pub providers: ProviderManager,
@@ -66,10 +68,19 @@ impl AppState {
             .is_some_and(|expires| expires > Instant::now())
     }
 
-    pub fn track_mint(&self, mint: &str) {
+    pub fn track_mint(&self, mint: &str) -> bool {
         if let Ok(mut active) = self.active_mints.lock() {
-            *active.entry(mint.to_owned()).or_insert(0) += 1;
+            if let Some(count) = active.get_mut(mint) {
+                *count += 1;
+                return true;
+            }
+            if active.len() >= MAX_ACTIVE_MARKET_MINTS {
+                return false;
+            }
+            active.insert(mint.to_owned(), 1);
+            return true;
         }
+        false
     }
 
     pub fn untrack_mint(&self, mint: &str) {
@@ -161,8 +172,8 @@ mod tests {
     #[test]
     fn tracked_mints_use_reference_counts() {
         let state = test_state();
-        state.track_mint("mint-a");
-        state.track_mint("mint-a");
+        assert!(state.track_mint("mint-a"));
+        assert!(state.track_mint("mint-a"));
         assert_eq!(state.active_mints(), vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a");
@@ -177,5 +188,15 @@ mod tests {
         let state = test_state();
         state.untrack_mint("unknown");
         assert!(state.active_mints().is_empty());
+    }
+
+    #[test]
+    fn caps_unique_active_mints_at_five_hundred() {
+        let state = test_state();
+        for index in 0..MAX_ACTIVE_MARKET_MINTS {
+            assert!(state.track_mint(&format!("mint-{index}")));
+        }
+        assert!(!state.track_mint("mint-over-limit"));
+        assert_eq!(state.active_mints().len(), MAX_ACTIVE_MARKET_MINTS);
     }
 }
