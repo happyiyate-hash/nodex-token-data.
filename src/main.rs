@@ -37,6 +37,11 @@ async fn main() -> Result<()> {
         market_stream_state.run_market_stream().await;
     });
 
+    let provider_stream_state = state.clone();
+    tokio::spawn(async move {
+        provider_stream_state.run_provider_streams().await;
+    });
+
     let protected = Router::new()
         .route("/providers/status", get(api::providers::status))
         .route(
