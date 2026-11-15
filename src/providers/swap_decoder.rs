@@ -102,14 +102,17 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
             if bytes.len() < 97 || bs58::encode(&bytes[8..40]).into_string() != mint {
                 continue;
             }
-            let sol = read_u64(&bytes, 40)?;
+            let sol_raw = read_u64(&bytes, 40)?;
+            let (quote_mint, quote_raw) =
+                decode_pump_quote(&bytes).unwrap_or((WSOL.to_owned(), sol_raw));
+            let sol = (quote_mint == WSOL).then_some(quote_raw as f64 / 1e9);
             return Some(Swap {
                 side: if bytes[56] == 1 { "buy" } else { "sell" },
                 trader: bs58::encode(&bytes[57..89]).into_string(),
                 base: read_u64(&bytes, 48)?,
-                quote: sol,
-                quote_mint: Some(WSOL.into()),
-                sol: Some(sol as f64 / 1e9),
+                quote: quote_raw,
+                quote_mint: Some(quote_mint),
+                sol,
                 time: read_i64(&bytes, 89)?,
             });
         }
@@ -133,6 +136,23 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
     }
     None
 }
+fn decode_pump_quote(bytes: &[u8]) -> Option<(String, u64)> {
+    // TradeEvent's quote fields follow the Borsh ix_name string, mode/fee
+    // fields and variable-length shareholders vector.
+    let name_len = read_u32(bytes, 258)? as usize;
+    let mut offset = 262_usize.checked_add(name_len)?;
+    offset = offset.checked_add(1 + 8 * 4)?;
+    let shareholder_count = read_u32(bytes, offset)? as usize;
+    offset = offset.checked_add(4 + shareholder_count.checked_mul(34)?)?;
+    let quote_mint = bs58::encode(bytes.get(offset..offset + 32)?).into_string();
+    let quote_amount = read_u64(bytes, offset + 32)?;
+    Some((quote_mint, quote_amount))
+}
+
+fn read_u32(b: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
+}
+
 fn token_decimals(tx: &Value, mint: &str) -> Option<u8> {
     for path in ["/meta/preTokenBalances", "/meta/postTokenBalances"] {
         if let Some(rows) = tx.pointer(path).and_then(Value::as_array) {
