@@ -45,7 +45,20 @@ pub async fn run_connection(
             }
             _ = refresh.tick() => {
                 let now = Instant::now();
-                pending.retain(|_, (_, sent_at)| now.duration_since(*sent_at) < SUBSCRIPTION_ACK_TIMEOUT);
+                let expired = expired_subscription_requests(&pending, now);
+                if !expired.is_empty() {
+                    let requests = expired
+                        .iter()
+                        .map(|(id, mint)| format!("{id}:{mint}"))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    warn!(
+                        provider,
+                        requests,
+                        "Subscription acknowledgement timed out; restarting socket so late acknowledgements cannot leak orphaned subscriptions"
+                    );
+                    return Err(anyhow!("{provider} subscription acknowledgement timed out"));
+                }
 
                 let desired = state.subscribed_mints().into_iter()
                     .collect::<std::collections::HashSet<_>>();
@@ -90,8 +103,9 @@ pub async fn run_connection(
                     }
                 }
 
-                // Drop pending subscriptions for tokens no longer requested.
-                pending.retain(|_, (mint, _)| desired.contains(mint));
+                // Keep canceled requests correlated until their acknowledgement arrives.
+                // If they time out, the socket is restarted above; this prevents a late
+                // acknowledgement from creating an untracked provider-side subscription.
             }
             incoming = socket.next() => {
                 let Some(incoming) = incoming else {
@@ -200,6 +214,17 @@ pub async fn run_connection(
     }
 }
 
+fn expired_subscription_requests(
+    pending: &HashMap<u64, (String, Instant)>,
+    now: Instant,
+) -> Vec<(u64, String)> {
+    pending
+        .iter()
+        .filter(|(_, (_, sent_at))| now.duration_since(*sent_at) >= SUBSCRIPTION_ACK_TIMEOUT)
+        .map(|(id, (mint, _))| (*id, mint.clone()))
+        .collect()
+}
+
 fn acquire_fetch_permit(semaphore: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit> {
     semaphore
         .clone()
@@ -224,6 +249,23 @@ mod tests {
 
         assert!(acquire_fetch_permit(&semaphore).is_ok());
         drop(second);
+    }
+
+    #[test]
+    fn expired_subscription_requests_are_detected_for_connection_restart() {
+        use super::{expired_subscription_requests, SUBSCRIPTION_ACK_TIMEOUT};
+        use std::{collections::HashMap, time::Instant};
+
+        let now = Instant::now();
+        let pending = HashMap::from([
+            (1, ("mint-expired".to_owned(), now - SUBSCRIPTION_ACK_TIMEOUT)),
+            (2, ("mint-live".to_owned(), now)),
+        ]);
+
+        assert_eq!(
+            expired_subscription_requests(&pending, now),
+            vec![(1, "mint-expired".to_owned())]
+        );
     }
 
     #[test]
