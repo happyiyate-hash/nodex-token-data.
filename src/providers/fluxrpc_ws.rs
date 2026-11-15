@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::state::AppState;
+use anyhow::Result;
 
 /// FluxRPC standard Solana WebSocket adapter (fallback source).
 pub async fn run_once(state: &AppState, endpoint: &str) -> Result<()> {
