@@ -226,6 +226,37 @@ impl AppState {
         Ok(())
     }
 
+    /// Refreshes holder concentration for currently subscribed token details.
+    /// The interval is intentionally slow to avoid turning holder snapshots into
+    /// a high-volume per-account RPC subscription.
+    pub async fn run_holder_stream(self) {
+        let mut refresh = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            refresh.tick().await;
+            for mint in self.subscribed_mints() {
+                match self.provider_client.fetch_holders_for_mint(&mint).await {
+                    Ok(holders) => {
+                        let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)
+                            .unwrap_or_default().as_millis() as u64;
+                        let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+                        match serde_json::to_value(holders) {
+                            Ok(data) => self.publish(StreamEvent {
+                                event: "holders_update".into(),
+                                mint: mint.clone(),
+                                topic: "token.holders".into(),
+                                sequence,
+                                timestamp_ms,
+                                data,
+                            }),
+                            Err(error) => warn!(mint, error = %error, "Could not serialize holder update"),
+                        }
+                    }
+                    Err(error) => warn!(mint, error = %error, "Holder refresh failed"),
+                }
+            }
+        }
+    }
+
     /// Helius is primary. FluxRPC is used after Helius fails or disconnects.
     pub async fn run_provider_streams(self) {
         loop {
