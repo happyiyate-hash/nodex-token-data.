@@ -10,13 +10,16 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::models::ChartPoint;
+use crate::models::{ChartPoint, Trade};
+
+type TimedChartCache = Arc<Mutex<HashMap<String, (Instant, Vec<ChartPoint>)>>>;
+type TimedTradesCache = Arc<Mutex<HashMap<String, (Instant, Vec<Trade>)>>>;
 
 #[derive(Clone)]
 pub struct MarketDataClient {
     http: Client,
-    chart_cache: Arc<Mutex<HashMap<String, (Instant, Vec<ChartPoint>)>>>,
-    trades_cache: Arc<Mutex<HashMap<String, (Instant, Vec<crate::models::Trade>)>>>,
+    chart_cache: TimedChartCache,
+    trades_cache: TimedTradesCache,
     gecko_request_gate: Arc<tokio::sync::Mutex<Option<Instant>>>,
 }
 
