@@ -94,7 +94,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     continue;
                                 }
 
-                                selected_mint = Some(mint.clone());
+                                if selected_mint.as_deref() != Some(mint.as_str()) {
+                                    if let Some(previous_mint) = selected_mint.replace(mint.clone()) {
+                                        state.untrack_mint(&previous_mint);
+                                    }
+                                    state.track_mint(&mint);
+                                }
                                 selected_topics = command.topics.into_iter().collect();
 
                                 if send_json(&mut sender, json!({
@@ -107,7 +112,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             }
                             "unsubscribe" => {
                                 selected_topics.clear();
-                                selected_mint = None;
+                                if let Some(previous_mint) = selected_mint.take() {
+                                    state.untrack_mint(&previous_mint);
+                                }
                                 if send_json(&mut sender, json!({
                                     "event": "unsubscribed"
                                 })).await.is_err() {
@@ -179,6 +186,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 }
             }
         }
+    }
+
+    if let Some(mint) = selected_mint {
+        state.untrack_mint(&mint);
     }
 }
 
