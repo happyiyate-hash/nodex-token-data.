@@ -174,6 +174,9 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
                 _ => (WSOL.to_owned(), sol_raw),
             };
             let sol = (quote_mint == WSOL).then_some(quote_raw as f64 / 1e9);
+            let Ok(event_index) = u32::try_from(event_index) else {
+                continue;
+            };
             candidates.push(Swap {
                 side: if bytes[56] == 1 { "buy" } else { "sell" },
                 trader: bs58::encode(trader_bytes).into_string(),
@@ -182,7 +185,7 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
                 quote_mint: Some(quote_mint),
                 sol,
                 time,
-                event_index: u32::try_from(event_index).ok()?,
+                event_index,
             });
             continue;
         }
@@ -206,6 +209,9 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
             let Some(time) = read_i64(&bytes, 8) else {
                 continue;
             };
+            let Ok(event_index) = u32::try_from(event_index) else {
+                continue;
+            };
             candidates.push(Swap {
                 side: if buy { "buy" } else { "sell" },
                 trader: bs58::encode(trader_bytes).into_string(),
@@ -214,7 +220,7 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
                 quote_mint: None,
                 sol: None,
                 time,
-                event_index: u32::try_from(event_index).ok()?,
+                event_index,
             });
         }
     }
