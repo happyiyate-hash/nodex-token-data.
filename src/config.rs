@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 pub struct AppConfig {
     pub bind_addr: SocketAddr,
     pub api_key: String,
+    pub database_url: String,
     pub providers: Vec<ProviderConfig>,
 }
 
@@ -45,9 +46,13 @@ impl AppConfig {
             providers.push(build_provider("fluxrpc", &fluxrpc_keys, &template)?);
         }
 
+        let database_url = env::var("NODEX_DATABASE_URL")
+            .unwrap_or_else(|_| "sqlite://./data/nodex-token-data.db".to_owned());
+
         Ok(Self {
             bind_addr,
             api_key,
+            database_url,
             providers,
         })
     }
