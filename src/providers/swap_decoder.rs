@@ -504,6 +504,41 @@ mod tests {
     }
 
     #[test]
+    fn decodes_mixed_buy_and_sell_events_for_same_trader() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let mut buy = vec![0_u8; 184];
+        buy[..8].copy_from_slice(&[103, 244, 82, 31, 44, 245, 119, 119]);
+        buy[8..16].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
+        buy[16..24].copy_from_slice(&500_u64.to_le_bytes());
+        buy[64..72].copy_from_slice(&250_u64.to_le_bytes());
+        buy[152..184].copy_from_slice(&[4; 32]);
+
+        let mut sell = buy.clone();
+        sell[..8].copy_from_slice(&[62, 47, 55, 10, 165, 3, 220, 42]);
+        sell[16..24].copy_from_slice(&200_u64.to_le_bytes());
+
+        let logs = [
+            format!("Program {PUMP_SWAP} invoke [1]"),
+            format!("Program data: {}", STANDARD.encode(buy)),
+            format!("Program data: {}", STANDARD.encode(sell)),
+            format!("Program {PUMP_SWAP} success"),
+        ];
+        let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1000"}}],
+            "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1300"}}]
+        }});
+
+        let events = decode_events(&refs, &mint, &tx);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].side, "buy");
+        assert_eq!(events[0].base, 500);
+        assert_eq!(events[1].side, "sell");
+        assert_eq!(events[1].base, 200);
+    }
+
+    #[test]
     fn decodes_pump_trade_event() {
         let mut b = vec![0_u8; 97];
         b[..8].copy_from_slice(&[189, 219, 127, 211, 78, 230, 97, 238]);
