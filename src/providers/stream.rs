@@ -25,8 +25,12 @@ pub async fn run_connection(
     let mut mint_to_subscription = HashMap::<String, u64>::new();
     let mut active = HashSet::<String>::new();
     let mut refresh = tokio::time::interval(Duration::from_secs(5));
+    let mut keepalive = tokio::time::interval(Duration::from_secs(30));
     loop {
         tokio::select! {
+            _ = keepalive.tick() => {
+                socket.send(Message::Ping(Vec::new().into())).await?;
+            }
             _ = refresh.tick() => {
                 let current = state.subscribed_mints().into_iter().collect::<HashSet<_>>();
                 for mint in current.difference(&active) {
