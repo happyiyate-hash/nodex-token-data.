@@ -33,9 +33,8 @@ impl AppConfig {
         let mut providers = Vec::new();
         let helius_keys = parse_csv_env("HELIUS_API_KEYS");
         if !helius_keys.is_empty() {
-            let template = env::var("HELIUS_RPC_URL_TEMPLATE").unwrap_or_else(|_| {
-                "https://mainnet.helius-rpc.com/?api-key={api_key}".to_owned()
-            });
+            let template = env::var("HELIUS_RPC_URL_TEMPLATE")
+                .unwrap_or_else(|_| "https://mainnet.helius-rpc.com/?api-key={api_key}".to_owned());
             providers.push(build_provider("helius", &helius_keys, &template)?);
         }
 
