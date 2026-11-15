@@ -229,6 +229,5 @@ mod tests {
     #[test]
     fn configured_fetch_limit_is_positive_and_bounded() {
         assert_eq!(MAX_CONCURRENT_TRANSACTION_FETCHES, 32);
-        assert!(MAX_CONCURRENT_TRANSACTION_FETCHES > 0);
     }
 }
