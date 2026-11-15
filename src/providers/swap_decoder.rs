@@ -16,6 +16,7 @@ struct Swap {
     quote_mint: Option<String>,
     sol: Option<f64>,
     time: i64,
+    event_index: u32,
 }
 
 pub async fn decode_trade(
@@ -82,6 +83,7 @@ pub async fn decode_trade(
         price_usd: quote_usd.map(|v| v / token_amount),
         volume_usd: quote_usd,
         timestamp_ms: timestamp.saturating_mul(1000),
+        event_index: event.event_index,
     })
 }
 
@@ -91,7 +93,7 @@ fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
     let mut invocation_stack = Vec::<&str>::new();
     let mut candidates = Vec::new();
 
-    for line in logs {
+    for (event_index, line) in logs.iter().enumerate() {
         if let Some(program_line) = line.strip_prefix("Program ") {
             if let Some((program, _)) = program_line.split_once(" invoke [") {
                 invocation_stack.push(program);
@@ -158,6 +160,7 @@ fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
                 quote_mint: Some(quote_mint),
                 sol,
                 time,
+                event_index: u32::try_from(event_index).ok()?,
             });
             continue;
         }
@@ -189,6 +192,7 @@ fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
                 quote_mint: None,
                 sol: None,
                 time,
+                event_index: u32::try_from(event_index).ok()?,
             });
         }
     }
