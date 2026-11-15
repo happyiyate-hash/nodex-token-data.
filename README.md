@@ -64,6 +64,8 @@ Implemented:
 - Read-only provider `getSlot` checks.
 - API-key middleware for protected REST endpoints.
 - Token snapshot response schema and route, including live `getTokenSupply` and `getAccountInfo` retrieval with Helius-first / FluxRPC fallback.
+- Market snapshot fields from the most liquid matching Solana pair returned by DexScreener.
+- Batched market quote polling for active WebSocket subscriptions, publishing `token.market` events through the existing broadcast bus.
 - Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and creator authority when returned).
 - Short-lived, single-use WebSocket tickets.
 - Authenticated WebSocket handshake, topic subscription acknowledgements, unsubscribe and chart-timeframe command.
@@ -71,13 +73,18 @@ Implemented:
 - CI checks for format, Clippy, tests and release build.
 
 Not yet implemented:
-- Price/market-cap calculation, trade decoding, OHLCV history and holder indexing.
+- Trade decoding, historical OHLCV history and holder indexing.
 - Metadata enrichment when Helius DAS is not configured or does not return asset metadata.
+- Durable storage, candle aggregation and backfill after service downtime.
 - A persistent event/indexing pipeline and event producers. The WebSocket currently provides the subscription transport; no live market events are emitted until those workers are connected.
 - Durable historical storage, retention and candle aggregation.
 - Production deployment and TLS verification.
 
-**Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market values, charts, trades and holders still return unavailable/null values until their data sources, indexers and persistence are implemented. Do not present this as a complete or production-ready market-data service.
+**Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market price, liquidity, 5-minute/24-hour change, 24-hour volume and transaction count can now be populated from DexScreener when a matching pair exists. The backend polls active subscribed tokens in batches and relays those quotes over its own WebSocket. This is periodic REST polling, not a provider-pushed market feed. Historical chart candles, decoded trades, holder counts and top-holder indexing still return unavailable/null values until their data sources and storage are implemented. Do not present this as a complete or production-ready market-data service.
+
+## Market data source
+
+The first market-data adapter uses the public DexScreener Solana token-pairs endpoint. The adapter batches up to 30 mint addresses per request and selects the highest-liquidity pair where the requested mint is the base token. The upstream API documents a 300-request/minute limit for this endpoint. The service polls active subscriptions every five seconds; this is suitable for an initial private/testing data layer, not a guaranteed sub-second feed. A dedicated paid streaming provider can be added later behind the same market-data interface if the required latency and budget justify it.
 
 ## Configuration
 
