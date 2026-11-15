@@ -212,7 +212,7 @@ impl MarketStore {
     }
 }
 
-fn candle_intervals() -> [(&'static str, i64); 6] {
+fn candle_intervals() -> [(&'static str, i64); 9] {
     [
         ("1S", 1_000),
         ("5S", 5_000),
