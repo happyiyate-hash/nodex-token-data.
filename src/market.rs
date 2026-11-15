@@ -119,6 +119,7 @@ fn transaction_count(pair: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn parses_numeric_strings_and_json_numbers() {
