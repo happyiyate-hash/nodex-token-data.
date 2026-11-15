@@ -258,7 +258,10 @@ mod tests {
 
         let now = Instant::now();
         let pending = HashMap::from([
-            (1, ("mint-expired".to_owned(), now - SUBSCRIPTION_ACK_TIMEOUT)),
+            (
+                1,
+                ("mint-expired".to_owned(), now - SUBSCRIPTION_ACK_TIMEOUT),
+            ),
             (2, ("mint-live".to_owned(), now)),
         ]);
 
