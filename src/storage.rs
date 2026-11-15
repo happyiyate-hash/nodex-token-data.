@@ -19,9 +19,9 @@ impl MarketStore {
             if path != ":memory:" {
                 if let Some(parent) = Path::new(path).parent() {
                     if !parent.as_os_str().is_empty() {
-                        tokio::fs::create_dir_all(parent)
-                            .await
-                            .with_context(|| format!("Could not create database directory {}", parent.display()))?;
+                        tokio::fs::create_dir_all(parent).await.with_context(|| {
+                            format!("Could not create database directory {}", parent.display())
+                        })?;
                     }
                 }
             }
@@ -198,14 +198,16 @@ impl MarketStore {
         Ok(rows
             .into_iter()
             .rev()
-            .map(|(timestamp_ms, open, high, low, close, volume)| ChartPoint {
-                timestamp_ms,
-                open,
-                high,
-                low,
-                close,
-                volume,
-            })
+            .map(
+                |(timestamp_ms, open, high, low, close, volume)| ChartPoint {
+                    timestamp_ms,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                },
+            )
             .collect())
     }
 }
@@ -250,9 +252,18 @@ mod tests {
             timestamp_ms: 150_000,
         };
 
-        assert!(store.record_confirmed_trade("mint-a", &second).await.unwrap());
-        assert!(store.record_confirmed_trade("mint-a", &first).await.unwrap());
-        assert!(!store.record_confirmed_trade("mint-a", &first).await.unwrap());
+        assert!(store
+            .record_confirmed_trade("mint-a", &second)
+            .await
+            .unwrap());
+        assert!(store
+            .record_confirmed_trade("mint-a", &first)
+            .await
+            .unwrap());
+        assert!(!store
+            .record_confirmed_trade("mint-a", &first)
+            .await
+            .unwrap());
 
         let candles = store.load_candles("mint-a", "1M", 10).await.unwrap();
         assert_eq!(candles.len(), 1);
