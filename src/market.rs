@@ -417,6 +417,7 @@ mod tests {
                 "tx_from_address": "wallet",
                 "to_token_amount": "123.5",
                 "price_to_in_usd": "0.004",
+                "volume_in_usd": "0.494",
                 "block_timestamp": "2026-11-15T07:00:00Z"
             }
         });
@@ -424,7 +425,7 @@ mod tests {
         assert_eq!(trade.side, "buy");
         assert_eq!(trade.token_amount, Some(123.5));
         assert_eq!(trade.price_usd, Some(0.004));
-        assert_eq!(trade.volume_usd, None);
+        assert_eq!(trade.volume_usd, Some(0.494));
         assert_eq!(trade.amount_sol, None);
         assert_eq!(trade.trader.as_deref(), Some("wallet"));
     }
