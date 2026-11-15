@@ -1,0 +1,228 @@
+use std::{path::Path, str::FromStr, time::Duration};
+
+use anyhow::{Context, Result};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    SqlitePool,
+};
+
+use crate::models::{ChartPoint, Trade};
+
+#[derive(Clone)]
+pub struct MarketStore {
+    pool: SqlitePool,
+}
+
+impl MarketStore {
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        if let Some(path) = database_url.strip_prefix("sqlite://") {
+            if path != ":memory:" {
+                if let Some(parent) = Path::new(path).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .with_context(|| format!("Could not create database directory {}", parent.display()))?;
+                    }
+                }
+            }
+        }
+
+        let options = SqliteConnectOptions::from_str(database_url)?
+            .create_if_missing(true)
+            .busy_timeout(Duration::from_secs(5))
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .context("Could not open NodeX market-data database")?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS market_trades (
+                mint TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                side TEXT NOT NULL,
+                trader TEXT,
+                token_amount REAL,
+                price_usd REAL,
+                volume_usd REAL,
+                timestamp_ms INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                PRIMARY KEY (mint, signature)
+            )",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_market_trades_mint_time
+             ON market_trades(mint, timestamp_ms DESC)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS market_candles (
+                mint TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL NOT NULL,
+                source TEXT NOT NULL,
+                PRIMARY KEY (mint, timeframe, timestamp_ms)
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        Ok(Self { pool })
+    }
+
+    /// Seed historical candles without replacing candles already built from
+    /// locally observed swaps. This makes repeated history backfills safe.
+    pub async fn seed_historical_candles(
+        &self,
+        mint: &str,
+        timeframe: &str,
+        points: &[ChartPoint],
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        for point in points {
+            sqlx::query(
+                "INSERT INTO market_candles
+                 (mint, timeframe, timestamp_ms, open, high, low, close, volume, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'historical_provider')
+                 ON CONFLICT(mint, timeframe, timestamp_ms) DO NOTHING",
+            )
+            .bind(mint)
+            .bind(timeframe)
+            .bind(point.timestamp_ms)
+            .bind(point.open)
+            .bind(point.high)
+            .bind(point.low)
+            .bind(point.close)
+            .bind(point.volume)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// Stores a confirmed swap once and updates locally derived candles.
+    /// Duplicate signatures are ignored, preventing replay double-counting.
+    pub async fn record_confirmed_trade(&self, mint: &str, trade: &Trade) -> Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO market_trades
+             (mint, signature, side, trader, token_amount, price_usd, volume_usd, timestamp_ms, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+             ON CONFLICT(mint, signature) DO NOTHING",
+        )
+        .bind(mint)
+        .bind(&trade.signature)
+        .bind(&trade.side)
+        .bind(&trade.trader)
+        .bind(trade.token_amount)
+        .bind(trade.price_usd)
+        .bind(trade.volume_usd)
+        .bind(trade.timestamp_ms)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected() == 1;
+
+        if inserted {
+            if let (Some(price), Some(volume)) = (trade.price_usd, trade.volume_usd) {
+                if price.is_finite() && price > 0.0 && volume.is_finite() && volume >= 0.0 {
+                    for (timeframe, interval_ms) in candle_intervals() {
+                        let bucket = trade.timestamp_ms.div_euclid(interval_ms) * interval_ms;
+                        sqlx::query(
+                            "INSERT INTO market_candles
+                             (mint, timeframe, timestamp_ms, open, high, low, close, volume, source)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+                             ON CONFLICT(mint, timeframe, timestamp_ms) DO UPDATE SET
+                               high = MAX(market_candles.high, excluded.high),
+                               low = MIN(market_candles.low, excluded.low),
+                               close = excluded.close,
+                               volume = market_candles.volume + excluded.volume,
+                               source = 'onchain'",
+                        )
+                        .bind(mint)
+                        .bind(timeframe)
+                        .bind(bucket)
+                        .bind(price)
+                        .bind(price)
+                        .bind(price)
+                        .bind(price)
+                        .bind(volume)
+                        .execute(&mut *transaction)
+                        .await?;
+                    }
+                }
+            }
+        }
+
+        transaction.commit().await?;
+        Ok(inserted)
+    }
+
+    pub async fn load_candles(
+        &self,
+        mint: &str,
+        timeframe: &str,
+        limit: i64,
+    ) -> Result<Vec<ChartPoint>> {
+        let rows = sqlx::query_as::<_, (i64, f64, f64, f64, f64, f64)>(
+            "SELECT timestamp_ms, open, high, low, close, volume
+             FROM market_candles
+             WHERE mint = ? AND timeframe = ?
+             ORDER BY timestamp_ms DESC
+             LIMIT ?",
+        )
+        .bind(mint)
+        .bind(timeframe)
+        .bind(limit.clamp(1, 5000))
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .rev()
+            .map(|(timestamp_ms, open, high, low, close, volume)| ChartPoint {
+                timestamp_ms,
+                open,
+                high,
+                low,
+                close,
+                volume,
+            })
+            .collect())
+    }
+}
+
+fn candle_intervals() -> [(&'static str, i64); 6] {
+    [
+        ("1M", 60_000),
+        ("5M", 300_000),
+        ("15M", 900_000),
+        ("30M", 1_800_000),
+        ("1H", 3_600_000),
+        ("24H", 86_400_000),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::candle_intervals;
+
+    #[test]
+    fn candle_intervals_are_consistent() {
+        let intervals = candle_intervals();
+        assert_eq!(intervals[0], ("1M", 60_000));
+        assert_eq!(intervals[5], ("24H", 86_400_000));
+        for (_, interval) in intervals {
+            assert!(interval > 0);
+        }
+    }
+}
