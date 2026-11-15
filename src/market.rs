@@ -17,6 +17,7 @@ pub struct MarketDataClient {
     http: Client,
     chart_cache: Arc<Mutex<HashMap<String, (Instant, Vec<ChartPoint>)>>>,
     trades_cache: Arc<Mutex<HashMap<String, (Instant, Vec<crate::models::Trade>)>>>,
+    gecko_request_gate: Arc<tokio::sync::Mutex<Option<Instant>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,6 +45,7 @@ impl MarketDataClient {
             http,
             chart_cache: Arc::new(Mutex::new(HashMap::new())),
             trades_cache: Arc::new(Mutex::new(HashMap::new())),
+            gecko_request_gate: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -155,6 +157,7 @@ impl MarketDataClient {
             }
         }
 
+        self.wait_for_gecko_slot().await;
         let url = format!(
             "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/{period}?aggregate={aggregate}&limit=100&currency=usd&token=base"
         );
@@ -210,6 +213,7 @@ impl MarketDataClient {
             }
         }
 
+        self.wait_for_gecko_slot().await;
         let url = format!(
             "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/trades"
         );
@@ -247,6 +251,18 @@ impl MarketDataClient {
             );
         }
         Ok(trades)
+    }
+
+    async fn wait_for_gecko_slot(&self) {
+        const MIN_REQUEST_INTERVAL: Duration = Duration::from_secs(7);
+        let mut last_request = self.gecko_request_gate.lock().await;
+        if let Some(previous) = *last_request {
+            let wait = MIN_REQUEST_INTERVAL.saturating_sub(previous.elapsed());
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+        }
+        *last_request = Some(Instant::now());
     }
 }
 
