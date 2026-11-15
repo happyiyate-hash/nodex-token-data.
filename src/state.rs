@@ -139,7 +139,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::AppState;
     use crate::config::AppConfig;
     use std::net::SocketAddr;
 
