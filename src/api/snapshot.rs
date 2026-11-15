@@ -15,7 +15,9 @@ const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
 fn is_valid_mint(mint: &str) -> bool {
     (32..=44).contains(&mint.len())
         && mint.chars().all(|c| BASE58.contains(c))
-        && bs58::decode(mint).into_vec().is_ok_and(|bytes| bytes.len() == 32)
+        && bs58::decode(mint)
+            .into_vec()
+            .is_ok_and(|bytes| bytes.len() == 32)
 }
 pub async fn get_snapshot(
     Path(mint): Path<String>,
