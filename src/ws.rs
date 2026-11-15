@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use axum::{extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Query, State}, response::IntoResponse};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use crate::{state::AppState, stream::{ClientCommand, TOPICS}};
@@ -85,7 +85,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 }
 async fn send_json<S>(sender: &mut S, value: serde_json::Value) -> Result<(), ()>
-where S: SinkExt<Message> + Unpin {
+where S: Sink<Message> + Unpin {
     let text = serde_json::to_string(&value).map_err(|_| ())?;
     sender.send(Message::Text(text.into())).await.map_err(|_| ())
 }
