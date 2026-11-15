@@ -154,12 +154,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     })).await.is_err() {
                                         break;
                                     }
-                                } else if send_json(&mut sender, json!({
-                                    "event": "chart_timeframe_ack",
-                                    "mint": selected_mint,
-                                    "timeframe": command.timeframe
-                                })).await.is_err() {
-                                    break;
+                                } else {
+                                    if let (Some(mint), Some(timeframe)) = (selected_mint.as_deref(), command.timeframe.as_deref()) {
+                                        if selected_topics.contains("token.chart") {
+                                            if let Err(error) = state.publish_chart_snapshot(mint, timeframe).await {
+                                                if send_json(&mut sender, json!({
+                                                    "event": "error",
+                                                    "code": "chart_snapshot_failed",
+                                                    "message": error.to_string()
+                                                })).await.is_err() { break; }
+                                            }
+                                        }
+                                    }
+                                    if send_json(&mut sender, json!({
+                                        "event": "chart_timeframe_ack",
+                                        "mint": selected_mint,
+                                        "timeframe": command.timeframe
+                                    })).await.is_err() { break; }
                                 }
                             }
                             _ => {
