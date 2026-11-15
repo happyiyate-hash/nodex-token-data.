@@ -105,10 +105,20 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 }
 
                                 if selected_mint.as_deref() != Some(mint.as_str()) {
-                                    if let Some(previous_mint) = selected_mint.replace(mint.clone()) {
+                                    if let Some(previous_mint) = selected_mint.take() {
                                         state.untrack_mint(&previous_mint);
                                     }
-                                    state.track_mint(&mint);
+                                    if !state.track_mint(&mint) {
+                                        if send_json(&mut sender, json!({
+                                            "event": "error",
+                                            "code": "active_token_limit",
+                                            "limit": 500
+                                        })).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                    selected_mint = Some(mint.clone());
                                 }
                                 selected_topics = command.topics.into_iter().collect();
 
