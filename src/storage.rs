@@ -94,9 +94,9 @@ impl MarketStore {
         let candle_columns = sqlx::query("PRAGMA table_info(market_candles)")
             .fetch_all(&pool)
             .await?;
-        let has_open_time = candle_columns
-            .iter()
-            .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("open_timestamp_ms"));
+        let has_open_time = candle_columns.iter().any(|row| {
+            row.try_get::<String, _>("name").ok().as_deref() == Some("open_timestamp_ms")
+        });
         if !has_open_time {
             sqlx::query("ALTER TABLE market_candles ADD COLUMN open_timestamp_ms INTEGER NOT NULL DEFAULT 0")
                 .execute(&pool)
@@ -105,9 +105,9 @@ impl MarketStore {
                 .execute(&pool)
                 .await?;
         }
-        let has_close_time = candle_columns
-            .iter()
-            .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("close_timestamp_ms"));
+        let has_close_time = candle_columns.iter().any(|row| {
+            row.try_get::<String, _>("name").ok().as_deref() == Some("close_timestamp_ms")
+        });
         if !has_close_time {
             sqlx::query("ALTER TABLE market_candles ADD COLUMN close_timestamp_ms INTEGER NOT NULL DEFAULT 0")
                 .execute(&pool)
@@ -116,7 +116,6 @@ impl MarketStore {
                 .execute(&pool)
                 .await?;
         }
-
 
         Ok(Self { pool })
     }
