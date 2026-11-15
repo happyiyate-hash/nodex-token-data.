@@ -1,28 +1,31 @@
 # NodeX Token Data — frontend data contract
 
-This document separates one-time/page-load data from live values. It is the contract target; fields remain unavailable until the relevant provider/indexer is implemented.
+This document separates one-time/page-load data from live values and records the actual provider coverage. Do not assume a topic is live merely because the WebSocket accepts its name.
 
 ## Snapshot groups
 
-| Group | Fields | Refresh policy |
+| Group | Current source and fields | Refresh policy |
 |---|---|---|
-| Identity | name, symbol, logo, mint, creator address, creation time | Fetch on token open; cache; refresh on explicit metadata invalidation |
-| Token info | decimals, total/circulating supply, token standard | Fetch on open; refresh only when on-chain metadata/account changes |
-| Market | price USD/SOL, market cap, liquidity, percentage changes, 24h volume, transaction count, buy/sell volume and pressure | Initial snapshot, then WebSocket |
-| Chart | historical OHLCV points and selected timeframe | Fetch history on open/timeframe change, then WebSocket updates |
-| Trades | recent confirmed swaps and their side, wallet, SOL/token amount, price and timestamp | Initial recent-trades snapshot, then WebSocket |
-| Holders | total count, top-10 concentration, largest holders and balances | Initial snapshot, then indexed refresh events; not necessarily every slot |
-| Creator | creator wallet and available creator metadata | Fetch on open; update only if source data changes |
+| Identity | Solana mint from request; optional Helius DAS name, symbol, image and explicit creator fields | Fetch on token open; cache; refresh on explicit metadata invalidation |
+| Token info | Solana RPC getTokenSupply and getAccountInfo: decimals, raw total supply and token program | Fetch on open; refresh only when on-chain account data changes |
+| Market | DexScreener matching base-token pair: USD price, reported market cap, liquidity, 5m/24h change, 24h volume and transaction count | Initial snapshot, then five-second batched REST polling relayed over token.market WebSocket events |
+| Chart | GeckoTerminal OHLCV for 1m, 5m, 15m, 30m, 1h and 24h selections | Fetch history on open/timeframe change; cached locally for 60 seconds. No live candle publisher yet. 1S, 5S and 10S return no historical points. |
+| Trades | GeckoTerminal recent pool swaps: signature, side, wallet, token amount, USD price, USD volume and timestamp | Initial snapshot; cached locally for 60 seconds. No live trade publisher yet. Counter-asset amount is not labeled as SOL. |
+| Holders | No holder indexer connected | Unavailable until indexed account data is implemented |
+| Creator | Optional explicit creator fields from Helius DAS; update authority is not treated as creator | Fetch on open; no live creator publisher yet |
+
+Market price streaming is polling-based, not a provider-pushed stream. The public DexScreener endpoint supports batches of up to 30 addresses and documents a 300-request/minute limit. The backend caps unique active mint subscriptions at 500; at the cap, a five-second cycle uses at most 17 market requests.
+
+GeckoTerminal's public API is cached upstream for one minute and limited to approximately 10 requests/minute. The backend caches chart and trade responses for 60 seconds and spaces uncached requests by at least seven seconds. This is an initial private/testing source, not a high-volume production feed.
 
 ## WebSocket topics
 
-- `token.market`
-- `token.chart`
-- `token.trades`
-- `token.activity`
-- `token.holders`
-- `token.info`
-- `token.creator`
+- token.market — currently emits DexScreener market quotes.
+- token.chart — accepted but no live candle publisher yet.
+- token.trades — accepted but no live trade publisher yet.
+- token.activity — accepted but no publisher yet.
+- token.holders — accepted but no indexer/publisher yet.
+- token.info and token.creator — accepted but no live publishers yet.
 
 One socket multiplexes all selected topics. Events include mint, topic, sequence and timestamp. Consumers should discard duplicate/out-of-order sequence values and resnapshot after a detected gap or reconnect.
 
@@ -32,9 +35,10 @@ Position and portfolio state are owned by the existing NodeX trading engine, not
 
 ## Data integrity rules
 
-- `null` means unknown/unavailable; zero means a verified zero.
+- null means unknown/unavailable; zero means a verified zero.
 - Empty arrays mean no records were returned, not necessarily that none exist unless the status confirms completeness.
 - Every data group should eventually include source, last-updated time, completeness and freshness.
 - Holder counts and top-holder rankings require indexed account data; a single largest-accounts RPC call is not a complete holder index.
-- Market cap requires a verified price and a clearly defined supply basis.
-- Chart history must be derived from indexed swaps or a trusted historical source, not generated demo points.
+- Market cap uses the provider's reported market-cap field; fully diluted valuation is not substituted when market cap is absent.
+- Chart history comes from the historical pool-data source, not generated demo points.
+- Token amount and USD volume in the trade snapshot are kept distinct; the quote-asset amount is not assumed to be SOL.
