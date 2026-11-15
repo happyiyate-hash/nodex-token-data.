@@ -14,8 +14,8 @@ use tracing::warn;
 use crate::{
     config::AppConfig,
     market::MarketDataClient,
-    storage::MarketStore,
     providers::{ProviderClient, ProviderManager},
+    storage::MarketStore,
     stream::StreamEvent,
 };
 
@@ -126,10 +126,7 @@ impl AppState {
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_millis() as u64;
-                            let sequence = self
-                                .stream_sequence
-                                .fetch_add(1, Ordering::Relaxed)
-                                + 1;
+                            let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
                             let data = match serde_json::to_value(&quote) {
                                 Ok(value) => value,
                                 Err(_) => continue,
