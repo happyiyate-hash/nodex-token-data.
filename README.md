@@ -70,6 +70,9 @@ Implemented:
 - SQLite persistence for historical candles and confirmed swaps, with duplicate-signature protection and local OHLCV aggregation across 1s, 5s, 10s, 1m, 5m, 15m, 30m, 1h and 24h intervals. Historical OHLCV is paged backwards for a 48-hour seed window (up to four bounded pages).
 - Historical provider candles are seeded without overwriting candles already built from locally observed swaps.
 - Batched market quote polling for active WebSocket subscriptions, publishing `token.market` events through the existing broadcast bus.
+- Separate Helius and FluxRPC WebSocket adapters, Helius-first supervision and FluxRPC fallback.
+- Mint-scoped `logsSubscribe` subscriptions, confirmed transaction retrieval, Pump.fun `TradeEvent` and PumpSwap `BuyEvent`/`SellEvent` decoding, deduplication, live trade/activity events and locally updated candles.
+- Independent token identity, token info, market, chart, trade, holder and creator components coordinated by a snapshot coordinator.
 - Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and explicitly identified creator fields when returned).
 - Short-lived, single-use WebSocket tickets.
 - Authenticated WebSocket handshake, topic subscription acknowledgements, unsubscribe and chart-timeframe command.
@@ -77,10 +80,10 @@ Implemented:
 - CI checks for format, Clippy, tests and release build.
 
 Not yet implemented:
-- Live trade decoding/publishing and holder indexing.
+- Broader DEX decoder coverage beyond Pump.fun and PumpSwap; full holder indexing and complete holder counts.
 - Second-level chart history (`1S`, `5S`, `10S`), which the current historical market-data source does not provide.
 - Alternate metadata-provider fallback when Helius DAS is unavailable or returns no metadata.
-- Live on-chain swap ingestion/decoding, trade publishing, and automated historical backfill after downtime. The persistence and candle-aggregation layer is now present, but no confirmed on-chain swap source is connected to it yet.
+- Automated historical on-chain swap backfill after downtime. The current WebSocket ingestion records confirmed Pump.fun/PumpSwap events while connected; provider replay/backfill and other DEX decoders remain to be added.
 - Production deployment and TLS verification.
 
 **Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market price, liquidity, 5-minute/24-hour change, 24-hour volume and transaction count can be populated from DexScreener when a matching pair exists. The backend polls active subscribed tokens in batches and relays those quotes over its own WebSocket; this is periodic REST polling, not a provider-pushed market feed. The initial REST snapshot can also load historical candles and recent trades from GeckoTerminal for supported timeframes. GeckoTerminal's public API is cached for one minute and limited to approximately 10 requests per minute, so chart/trade availability is best-effort and not suitable as a high-volume production feed. The `1S`, `5S` and `10S` chart selections intentionally return no historical candles rather than inventing second-level data. Live trade events, holder counts and top-holder indexing remain unimplemented. Do not present this as a complete or production-ready market-data service.
