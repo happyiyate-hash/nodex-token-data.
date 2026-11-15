@@ -37,8 +37,8 @@ Connect to `/ws/tokens?ticket={ticket}`, then send:
 Supported topics:
 
 - `token.market`: currently emits price, market cap, 5-minute/24-hour change, liquidity, 24-hour volume and transaction count when supplied by the selected DEX pair.
-- `token.chart`: reserved for candle updates; no publisher is connected yet.
-- `token.trades`: reserved for confirmed buy/sell transaction events; no decoder is connected yet.
+- `token.chart`: reserved for live candle updates; historical candles are loaded in the REST snapshot when GeckoTerminal has data for the selected pool and timeframe.
+- `token.trades`: reserved for live confirmed buy/sell transaction events; recent pool trades are loaded in the REST snapshot when GeckoTerminal has data.
 - `token.activity`: reserved for floating buy/sell activity; no publisher is connected yet.
 - `token.holders`: reserved for holder count, largest holders and ownership concentration; no indexer is connected yet.
 - `token.info` and `token.creator`: reserved for changes to verified metadata; no live publishers are connected yet.
@@ -74,16 +74,17 @@ Implemented:
 - CI checks for format, Clippy, tests and release build.
 
 Not yet implemented:
-- Trade decoding, historical OHLCV history and holder indexing.
+- Live trade decoding/publishing and holder indexing.
+- Second-level chart history (`1S`, `5S`, `10S`), which the current historical market-data source does not provide.
 - Helius DAS metadata when the DAS method is unavailable or the asset has no returned metadata.
 - Persistent historical indexing, retention, candle aggregation and backfill after service downtime. The current market publisher is active but uses five-second REST polling.
 - Production deployment and TLS verification.
 
-**Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market price, liquidity, 5-minute/24-hour change, 24-hour volume and transaction count can now be populated from DexScreener when a matching pair exists. The backend polls active subscribed tokens in batches and relays those quotes over its own WebSocket. This is periodic REST polling, not a provider-pushed market feed. Historical chart candles, decoded trades, holder counts and top-holder indexing still return unavailable/null values until their data sources and storage are implemented. Do not present this as a complete or production-ready market-data service.
+**Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market price, liquidity, 5-minute/24-hour change, 24-hour volume and transaction count can be populated from DexScreener when a matching pair exists. The backend polls active subscribed tokens in batches and relays those quotes over its own WebSocket; this is periodic REST polling, not a provider-pushed market feed. The initial REST snapshot can also load historical candles and recent trades from GeckoTerminal for supported timeframes. GeckoTerminal's public API is cached for one minute and limited to approximately 10 requests per minute, so chart/trade availability is best-effort and not suitable as a high-volume production feed. The `1S`, `5S` and `10S` chart selections intentionally return no historical candles rather than inventing second-level data. Live trade events, holder counts and top-holder indexing remain unimplemented. Do not present this as a complete or production-ready market-data service.
 
 ## Market data source
 
-The first market-data adapter uses the public DexScreener Solana token-pairs endpoint. The adapter batches up to 30 mint addresses per request and selects the highest-liquidity pair where the requested mint is the base token. The upstream API documents a 300-request/minute limit for this endpoint. The service polls active subscriptions every five seconds, batches up to 30 mints per request, and caps the number of unique active mints at 500. At that cap, one full poll cycle uses at most 17 requests (about 204 requests/minute before snapshot lookups), below the documented endpoint limit. This is suitable for an initial private/testing data layer, not a guaranteed sub-second feed. A dedicated paid streaming provider can be added later behind the same market-data interface if the required latency and budget justify it.
+The current market-data layer uses the public DexScreener Solana token-pairs endpoint for live market snapshots and the GeckoTerminal public API for historical candles and recent pool trades. The adapter batches up to 30 mint addresses per request and selects the highest-liquidity pair where the requested mint is the base token. The upstream API documents a 300-request/minute limit for this endpoint. The service polls active subscriptions every five seconds, batches up to 30 mints per request, and caps the number of unique active mints at 500. At that cap, one full poll cycle uses at most 17 requests (about 204 requests/minute before snapshot lookups), below the documented endpoint limit. This is suitable for an initial private/testing data layer, not a guaranteed sub-second feed. GeckoTerminal chart and trade requests are separately cached for 60 seconds in this service to reduce duplicate upstream calls. A dedicated paid streaming provider can be added later behind the same market-data interface if the required latency and budget justify it.
 
 ## Configuration
 
