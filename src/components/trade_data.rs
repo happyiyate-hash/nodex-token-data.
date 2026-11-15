@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use anyhow::Result;
 use crate::{market::MarketDataClient, models::Trade, storage::MarketStore};
+use anyhow::Result;
+use std::collections::HashMap;
 
 pub async fn fetch(
     mint: &str,
