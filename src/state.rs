@@ -261,24 +261,39 @@ impl AppState {
         }
     }
 
-    /// Helius is primary. FluxRPC is used after Helius fails or disconnects.
+    /// Keeps one provider stream active at a time. Helius is preferred; FluxRPC
+    /// is attempted immediately when every Helius socket fails. A failed sweep
+    /// backs off exponentially before retrying the preferred provider.
     pub async fn run_provider_streams(self) {
+        let mut retry_delay = Duration::from_secs(1);
+        const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
         loop {
-            let mut attempted = false;
+            let mut connected_attempt = false;
+
             for provider in ["helius", "fluxrpc"] {
-                for endpoint in self.providers.websocket_endpoints(provider) {
-                    attempted = true;
+                let endpoints = self.providers.websocket_endpoints(provider);
+                for endpoint in endpoints {
+                    connected_attempt = true;
+                    info!(provider, "Attempting provider WebSocket connection");
                     let result = match provider {
                         "helius" => crate::providers::helius_ws::run_once(&self, &endpoint).await,
                         "fluxrpc" => crate::providers::fluxrpc_ws::run_once(&self, &endpoint).await,
                         _ => continue,
                     };
                     if let Err(error) = result {
-                        warn!(provider, error = %error, "Provider WebSocket disconnected; trying next provider");
+                        warn!(provider, error = %error, "Provider WebSocket ended; trying next configured endpoint");
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_secs(if attempted { 3 } else { 15 })).await;
+
+            if !connected_attempt {
+                warn!("No provider WebSocket endpoints are configured");
+            } else {
+                warn!(delay_seconds = retry_delay.as_secs(), "All provider WebSocket attempts ended; retrying from primary");
+            }
+            tokio::time::sleep(retry_delay).await;
+            retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
         }
     }
 
