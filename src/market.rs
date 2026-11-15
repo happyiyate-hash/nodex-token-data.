@@ -323,7 +323,7 @@ mod tests {
     fn aggregates_fifteen_minute_points_into_thirty_minute_candles() {
         let points = vec![
             ChartPoint {
-                timestamp_ms: 1_700_000_000_000,
+                timestamp_ms: 1_699_999_200_000,
                 open: 1.0,
                 high: 1.5,
                 low: 0.8,
@@ -331,7 +331,7 @@ mod tests {
                 volume: 10.0,
             },
             ChartPoint {
-                timestamp_ms: 1_700_000_900_000,
+                timestamp_ms: 1_700_000_100_000,
                 open: 1.2,
                 high: 1.8,
                 low: 1.1,
