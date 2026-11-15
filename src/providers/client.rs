@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -24,10 +24,15 @@ pub struct ProviderCheck {
     pub error: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
-struct RpcResponse {
-    result: Option<u64>,
-    error: Option<Value>,
+#[derive(Clone, Debug)]
+pub struct TokenChainData {
+    pub decimals: u8,
+    pub total_supply: String,
+    pub token_program: String,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub logo_url: Option<String>,
+    pub creator_address: Option<String>,
 }
 
 impl ProviderClient {
@@ -40,8 +45,7 @@ impl ProviderClient {
         Ok(Self { http, manager })
     }
 
-    /// Checks every configured provider independently. Provider configuration
-    /// order is retained; Helius should be configured before FluxRPC.
+    /// Checks every configured provider independently using read-only getSlot.
     pub async fn check_all(&self) -> Vec<ProviderCheck> {
         let mut checks = Vec::new();
 
@@ -52,57 +56,137 @@ impl ProviderClient {
         checks
     }
 
-    async fn check_provider(&self, name: &'static str) -> ProviderCheck {
-        let configured_keys = self.manager.configured_key_count(name);
+    /// Retrieves on-chain mint supply and token-program ownership. Each RPC
+    /// operation tries Helius first, then FluxRPC, rotating through configured
+    /// keys on failure. Optional Helius DAS metadata never blocks chain data.
+    pub async fn fetch_token_chain_data(&self, mint: &str) -> Result<TokenChainData> {
+        let supply = self
+            .request_rpc(
+                "getTokenSupply",
+                json!([mint, { "commitment": "confirmed" }]),
+            )
+            .await?;
+
+        let supply_value = supply
+            .get("value")
+            .ok_or_else(|| anyhow!("RPC token-supply response has no value"))?;
+        let decimals = supply_value
+            .get("decimals")
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .ok_or_else(|| anyhow!("RPC token-supply response has invalid decimals"))?;
+        let total_supply = supply_value
+            .get("amount")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("RPC token-supply response has no raw amount"))?
+            .to_owned();
+
+        let account = self
+            .request_rpc(
+                "getAccountInfo",
+                json!([mint, { "encoding": "base64", "commitment": "confirmed" }]),
+            )
+            .await?;
+        let token_program = account
+            .get("value")
+            .and_then(|value| value.get("owner"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("RPC mint account response has no owner program"))?
+            .to_owned();
+
+        let metadata = self.fetch_helius_asset(mint).await.unwrap_or(Value::Null);
+        let name = metadata
+            .pointer("/content/metadata/name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let symbol = metadata
+            .pointer("/content/metadata/symbol")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let logo_url = metadata
+            .pointer("/content/links/image")
+            .or_else(|| metadata.pointer("/content/files/0/uri"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let creator_address = metadata
+            .get("authorities")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("address"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        Ok(TokenChainData {
+            decimals,
+            total_supply,
+            token_program,
+            name,
+            symbol,
+            logo_url,
+            creator_address,
+        })
+    }
+
+    async fn fetch_helius_asset(&self, mint: &str) -> Result<Value> {
+        if self.manager.configured_key_count("helius") == 0 {
+            return Err(anyhow!("Helius DAS is not configured"));
+        }
+
+        self.request_rpc_for_provider("helius", "getAsset", json!([{ "id": mint }]))
+            .await
+    }
+
+    async fn request_rpc(&self, method: &str, params: Value) -> Result<Value> {
         let mut last_error = None;
 
-        // Try every configured key once. A failed key does not prevent another
-        // key or the next provider from being used.
-        for _ in 0..configured_keys {
-            let Some(endpoint) = self.manager.next_endpoint(name) else {
-                break;
-            };
-
-            let started = Instant::now();
-            match self.request_slot(&endpoint.url).await {
-                Ok(slot) => {
-                    return ProviderCheck {
-                        name,
-                        configured_keys,
-                        reachable: true,
-                        slot: Some(slot),
-                        latency_ms: Some(started.elapsed().as_millis()),
-                        error: None,
-                    };
-                }
+        for provider in self.manager.provider_names() {
+            match self
+                .request_rpc_for_provider(provider, method, params.clone())
+                .await
+            {
+                Ok(result) => return Ok(result),
                 Err(error) => {
-                    warn!(provider = name, error = %error, "Solana RPC provider key failed");
-                    last_error = Some(error.to_string());
+                    warn!(provider, method, error = %error, "Solana RPC provider request failed");
+                    last_error = Some(error);
                 }
             }
         }
 
-        ProviderCheck {
-            name,
-            configured_keys,
-            reachable: false,
-            slot: None,
-            latency_ms: None,
-            error: last_error.or_else(|| Some("No provider keys are configured".to_owned())),
-        }
+        Err(last_error.unwrap_or_else(|| anyhow!("No Solana RPC providers are configured")))
     }
 
-    /// Uses Solana's read-only getSlot RPC method as a lightweight connectivity
-    /// check. The endpoint URL is never included in errors or logs.
-    async fn request_slot(&self, endpoint: &str) -> Result<u64> {
+    async fn request_rpc_for_provider(
+        &self,
+        provider: &'static str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
+        let configured_keys = self.manager.configured_key_count(provider);
+        let mut last_error = None;
+
+        for _ in 0..configured_keys {
+            let Some(endpoint) = self.manager.next_endpoint(provider) else {
+                break;
+            };
+
+            match self.send_rpc(&endpoint.url, method, params.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("No keys configured for provider {provider}")))
+    }
+
+    async fn send_rpc(&self, endpoint: &str, method: &str, params: Value) -> Result<Value> {
         let response = self
             .http
             .post(endpoint)
             .json(&json!({
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "getSlot",
-                "params": []
+                "method": method,
+                "params": params
             }))
             .send()
             .await
@@ -112,12 +196,12 @@ impl ProviderClient {
             return Err(anyhow!("RPC returned HTTP {}", response.status().as_u16()));
         }
 
-        let payload = response
-            .json::<RpcResponse>()
+        let payload: Value = response
+            .json()
             .await
-            .map_err(|_| anyhow!("RPC returned an invalid JSON response"))?;
+            .map_err(|_| anyhow!("RPC returned invalid JSON"))?;
 
-        if let Some(error) = payload.error {
+        if let Some(error) = payload.get("error") {
             let code = error.get("code").and_then(Value::as_i64);
             return Err(match code {
                 Some(code) => anyhow!("RPC returned error code {code}"),
@@ -126,7 +210,35 @@ impl ProviderClient {
         }
 
         payload
-            .result
-            .ok_or_else(|| anyhow!("RPC response did not contain a slot result"))
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("RPC response did not contain a result"))
+    }
+
+    async fn check_provider(&self, name: &'static str) -> ProviderCheck {
+        let configured_keys = self.manager.configured_key_count(name);
+        let started = std::time::Instant::now();
+
+        match self
+            .request_rpc_for_provider(name, "getSlot", json!([]))
+            .await
+        {
+            Ok(result) => ProviderCheck {
+                name,
+                configured_keys,
+                reachable: true,
+                slot: result.as_u64(),
+                latency_ms: Some(started.elapsed().as_millis()),
+                error: None,
+            },
+            Err(error) => ProviderCheck {
+                name,
+                configured_keys,
+                reachable: false,
+                slot: None,
+                latency_ms: None,
+                error: Some(error.to_string()),
+            },
+        }
     }
 }
