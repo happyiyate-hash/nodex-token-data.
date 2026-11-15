@@ -43,18 +43,29 @@ impl MarketDataClient {
             return Ok(HashMap::new());
         }
         if mints.len() > 30 {
-            return Err(anyhow!("DexScreener batches are limited to 30 token addresses"));
+            return Err(anyhow!(
+                "DexScreener batches are limited to 30 token addresses"
+            ));
         }
 
         let addresses = mints.join(",");
         let url = format!("https://api.dexscreener.com/tokens/v1/solana/{addresses}");
-        let response = self.http.get(url).send().await
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
             .map_err(|_| anyhow!("Market-data request failed or timed out"))?;
         if !response.status().is_success() {
-            return Err(anyhow!("Market-data provider returned HTTP {}", response.status().as_u16()));
+            return Err(anyhow!(
+                "Market-data provider returned HTTP {}",
+                response.status().as_u16()
+            ));
         }
 
-        let pairs: Vec<Value> = response.json().await
+        let pairs: Vec<Value> = response
+            .json()
+            .await
             .map_err(|_| anyhow!("Market-data provider returned invalid JSON"))?;
         let mut quotes = HashMap::new();
 
@@ -68,8 +79,14 @@ impl MarketDataClient {
 
             let quote = MarketQuote {
                 mint: mint.to_owned(),
-                pair_address: pair.get("pairAddress").and_then(Value::as_str).map(ToOwned::to_owned),
-                dex_id: pair.get("dexId").and_then(Value::as_str).map(ToOwned::to_owned),
+                pair_address: pair
+                    .get("pairAddress")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                dex_id: pair
+                    .get("dexId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
                 price_usd: parse_number(pair.get("priceUsd")),
                 market_cap_usd: parse_number(pair.get("marketCap")),
                 liquidity_usd: parse_number(pair.pointer("/liquidity/usd")),
@@ -77,14 +94,19 @@ impl MarketDataClient {
                 change_24h_pct: parse_number(pair.pointer("/priceChange/h24")),
                 volume_24h_usd: parse_number(pair.pointer("/volume/h24")),
                 transactions_24h: transaction_count(&pair),
-                pair_url: pair.get("url").and_then(Value::as_str).map(ToOwned::to_owned),
+                pair_url: pair
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
             };
 
-            let replace = quotes.get(mint)
+            let current_liquidity = quotes
+                .get(mint)
                 .and_then(|current: &MarketQuote| current.liquidity_usd)
-                .unwrap_or(0.0)
-                < quote.liquidity_usd.unwrap_or(0.0);
-            if replace || !quotes.contains_key(mint) {
+                .unwrap_or(0.0);
+            if quote.liquidity_usd.unwrap_or(0.0) > current_liquidity
+                || !quotes.contains_key(mint)
+            {
                 quotes.insert(mint.to_owned(), quote);
             }
         }
@@ -106,7 +128,9 @@ impl MarketDataClient {
 
 fn parse_number(value: Option<&Value>) -> Option<f64> {
     value.and_then(|value| {
-        value.as_f64().or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        value
+            .as_f64()
+            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
     })
 }
 
@@ -123,7 +147,10 @@ mod tests {
 
     #[test]
     fn parses_numeric_strings_and_json_numbers() {
-        assert_eq!(parse_number(Some(&Value::String("12.5".to_owned()))), Some(12.5));
+        assert_eq!(
+            parse_number(Some(&Value::String("12.5".to_owned()))),
+            Some(12.5)
+        );
         assert_eq!(parse_number(Some(&json!(7.25))), Some(7.25));
         assert_eq!(parse_number(Some(&Value::Null)), None);
     }
