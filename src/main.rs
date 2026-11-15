@@ -20,10 +20,11 @@ async fn main() -> Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
-    let state = AppState::new(&config);
+    let state = AppState::new(&config)?;
 
     let app = Router::new()
         .route("/health", get(api::health::health))
+        .route("/providers/status", get(api::providers::status))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
