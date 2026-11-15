@@ -14,12 +14,14 @@ use crate::models::{ChartPoint, Trade};
 
 type TimedChartCache = Arc<Mutex<HashMap<String, (Instant, Vec<ChartPoint>)>>>;
 type TimedTradesCache = Arc<Mutex<HashMap<String, (Instant, Vec<Trade>)>>>;
+type TimedQuoteCache = Arc<Mutex<HashMap<String, (Instant, Option<MarketQuote>)>>>;
 
 #[derive(Clone)]
 pub struct MarketDataClient {
     http: Client,
     chart_cache: TimedChartCache,
     trades_cache: TimedTradesCache,
+    quote_cache: TimedQuoteCache,
     gecko_request_gate: Arc<tokio::sync::Mutex<Option<Instant>>>,
 }
 
@@ -48,7 +50,7 @@ impl MarketDataClient {
             http,
             chart_cache: Arc::new(Mutex::new(HashMap::new())),
             trades_cache: Arc::new(Mutex::new(HashMap::new())),
-            gecko_request_gate: Arc::new(tokio::sync::Mutex::new(None)),
+            quote_cache: Arc::new(Mutex::new(HashMap::new())),            gecko_request_gate: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -134,13 +136,24 @@ impl MarketDataClient {
     }
 
     pub async fn fetch_quote(&self, mint: &str) -> Result<Option<MarketQuote>> {
+        if let Ok(cache) = self.quote_cache.lock() {
+            if let Some((expires, quote)) = cache.get(mint) {
+                if *expires > Instant::now() { return Ok(quote.clone()); }
+            }
+        }
         let mints = vec![mint.to_owned()];
         match self.fetch_quotes(&mints).await {
-            Ok(quotes) => Ok(quotes.get(mint).cloned()),
-            Err(error) => {
-                warn!(error = %error, "Market-data snapshot lookup failed");
-                Err(error)
+            Ok(quotes) => {
+                let quote = quotes.get(mint).cloned();
+                if let Ok(mut cache) = self.quote_cache.lock() {
+                    if cache.len() >= 500 {
+                        if let Some(key) = cache.keys().next().cloned() { cache.remove(&key); }
+                    }
+                    cache.insert(mint.to_owned(), (Instant::now() + Duration::from_secs(5), quote.clone()));
+                }
+                Ok(quote)
             }
+            Err(error) => { warn!(error = %error, "Market-data snapshot lookup failed"); Err(error) }
         }
     }
 
