@@ -66,6 +66,7 @@ Implemented:
 - API-key middleware for protected REST endpoints.
 - Token snapshot response schema and route, including live `getTokenSupply` and `getAccountInfo` retrieval with Helius-first / FluxRPC fallback.
 - Market snapshot fields from the most liquid matching Solana pair returned by DexScreener.
+- GeckoTerminal historical OHLCV and recent pool-trade snapshots, with 60-second caches and shared request pacing.
 - Batched market quote polling for active WebSocket subscriptions, publishing `token.market` events through the existing broadcast bus.
 - Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and explicitly identified creator fields when returned).
 - Short-lived, single-use WebSocket tickets.
@@ -76,7 +77,7 @@ Implemented:
 Not yet implemented:
 - Live trade decoding/publishing and holder indexing.
 - Second-level chart history (`1S`, `5S`, `10S`), which the current historical market-data source does not provide.
-- Helius DAS metadata when the DAS method is unavailable or the asset has no returned metadata.
+- Alternate metadata-provider fallback when Helius DAS is unavailable or returns no metadata.
 - Persistent historical indexing, retention, candle aggregation and backfill after service downtime. The current market publisher is active but uses five-second REST polling.
 - Production deployment and TLS verification.
 
