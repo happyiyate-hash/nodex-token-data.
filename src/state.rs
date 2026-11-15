@@ -33,7 +33,7 @@ impl AppState {
         self.tickets.lock().ok().and_then(|mut tickets| tickets.remove(ticket))
             .is_some_and(|expires| expires > Instant::now())
     }
-    pub fn publish(&self, event: StreamEvent) {
+    #[allow(dead_code)] // Called by provider/indexer workers as those pipelines are added.\n    pub fn publish(&self, event: StreamEvent) {
         let _ = self.stream_tx.send(event);
     }
 }
