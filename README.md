@@ -67,6 +67,8 @@ Implemented:
 - Token snapshot response schema and route, including live `getTokenSupply` and `getAccountInfo` retrieval with Helius-first / FluxRPC fallback.
 - Market snapshot fields from the most liquid matching Solana pair returned by DexScreener.
 - GeckoTerminal historical OHLCV and recent pool-trade snapshots, with 60-second caches and shared request pacing.
+- SQLite persistence for historical candles and confirmed swaps, with duplicate-signature protection and local OHLCV aggregation across 1m, 5m, 15m, 30m, 1h and 24h intervals.
+- Historical provider candles are seeded without overwriting candles already built from locally observed swaps.
 - Batched market quote polling for active WebSocket subscriptions, publishing `token.market` events through the existing broadcast bus.
 - Optional Helius DAS `getAsset` metadata enrichment (name, symbol, image and explicitly identified creator fields when returned).
 - Short-lived, single-use WebSocket tickets.
@@ -78,7 +80,7 @@ Not yet implemented:
 - Live trade decoding/publishing and holder indexing.
 - Second-level chart history (`1S`, `5S`, `10S`), which the current historical market-data source does not provide.
 - Alternate metadata-provider fallback when Helius DAS is unavailable or returns no metadata.
-- Persistent historical indexing, retention, candle aggregation and backfill after service downtime. The current market publisher is active but uses five-second REST polling.
+- Live on-chain swap ingestion/decoding, trade publishing, and automated historical backfill after downtime. The persistence and candle-aggregation layer is now present, but no confirmed on-chain swap source is connected to it yet.
 - Production deployment and TLS verification.
 
 **Important:** The snapshot now returns verified on-chain mint decimals, raw total supply and token-program identity when RPC providers are available. Helius DAS metadata is optional. Market price, liquidity, 5-minute/24-hour change, 24-hour volume and transaction count can be populated from DexScreener when a matching pair exists. The backend polls active subscribed tokens in batches and relays those quotes over its own WebSocket; this is periodic REST polling, not a provider-pushed market feed. The initial REST snapshot can also load historical candles and recent trades from GeckoTerminal for supported timeframes. GeckoTerminal's public API is cached for one minute and limited to approximately 10 requests per minute, so chart/trade availability is best-effort and not suitable as a high-volume production feed. The `1S`, `5S` and `10S` chart selections intentionally return no historical candles rather than inventing second-level data. Live trade events, holder counts and top-holder indexing remain unimplemented. Do not present this as a complete or production-ready market-data service.
