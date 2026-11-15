@@ -54,11 +54,7 @@ fn parse_csv_env(name: &str) -> Vec<String> {
         .collect()
 }
 
-fn build_provider(
-    name: &'static str,
-    keys: &[String],
-    template: &str,
-) -> Result<ProviderConfig> {
+fn build_provider(name: &'static str, keys: &[String], template: &str) -> Result<ProviderConfig> {
     if !template.contains("{api_key}") {
         return Err(anyhow!("{name} URL template must contain {{api_key}}"));
     }
