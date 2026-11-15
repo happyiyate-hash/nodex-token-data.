@@ -196,10 +196,7 @@ impl MarketDataClient {
             points = aggregate_30m(points);
         }
         if let Ok(mut cache) = self.chart_cache.lock() {
-            cache.insert(
-                cache_key,
-                (Instant::now() + Duration::from_secs(60), points.clone()),
-            );
+            store_cache(&mut cache, cache_key, points.clone());
         }
         Ok(points)
     }
@@ -248,10 +245,7 @@ impl MarketDataClient {
             .collect::<Vec<_>>();
 
         if let Ok(mut cache) = self.trades_cache.lock() {
-            cache.insert(
-                cache_key,
-                (Instant::now() + Duration::from_secs(60), trades.clone()),
-            );
+            store_cache(&mut cache, cache_key, trades.clone());
         }
         Ok(trades)
     }
@@ -267,6 +261,23 @@ impl MarketDataClient {
         }
         *last_request = Some(Instant::now());
     }
+}
+
+fn store_cache<T: Clone>(
+    cache: &mut HashMap<String, (Instant, Vec<T>)>,
+    key: String,
+    value: Vec<T>,
+) {
+    const MAX_CACHE_ENTRIES: usize = 500;
+    let now = Instant::now();
+    cache.retain(|_, (expires_at, _)| *expires_at > now);
+
+    if cache.len() >= MAX_CACHE_ENTRIES && !cache.contains_key(&key) {
+        if let Some(oldest_key) = cache.keys().next().cloned() {
+            cache.remove(&oldest_key);
+        }
+    }
+    cache.insert(key, (now + Duration::from_secs(60), value));
 }
 
 fn parse_trade(row: &Value) -> Option<Trade> {
