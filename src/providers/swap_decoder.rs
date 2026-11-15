@@ -19,16 +19,38 @@ struct Swap {
     event_index: u32,
 }
 
-pub async fn decode_trade(
+pub async fn decode_trades(
     mint: &str,
     signature: &str,
     tx: &Value,
     logs: &[Value],
     market: &MarketDataClient,
-) -> Option<Trade> {
+) -> Vec<Trade> {
     let lines = logs.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-    let event = decode_event(&lines, mint, tx)?;
-    let decimals = token_decimals(tx, mint)?;
+    let events = decode_events(&lines, mint, tx);
+    let Some(decimals) = token_decimals(tx, mint) else {
+        return Vec::new();
+    };
+
+    let mut trades = Vec::with_capacity(events.len());
+    for event in events {
+        if let Some(trade) =
+            decode_single_trade(event, mint, signature, tx, market, decimals).await
+        {
+            trades.push(trade);
+        }
+    }
+    trades
+}
+
+async fn decode_single_trade(
+    event: Swap,
+    mint: &str,
+    signature: &str,
+    tx: &Value,
+    market: &MarketDataClient,
+    decimals: u8,
+) -> Option<Trade> {
     let token_amount = event.base as f64 / 10_f64.powi(decimals as i32);
     if token_amount <= 0.0 || !token_amount.is_finite() {
         return None;
@@ -49,8 +71,8 @@ pub async fn decode_trade(
             .or_else(|| quote_mint_from_tx(tx, mint));
         match quote_mint {
             Some(WSOL) => {
-                let decimals = token_decimals(tx, WSOL).unwrap_or(9);
-                let sol = event.quote as f64 / 10_f64.powi(decimals as i32);
+                let quote_decimals = token_decimals(tx, WSOL).unwrap_or(9);
+                let sol = event.quote as f64 / 10_f64.powi(quote_decimals as i32);
                 amount_sol = Some(sol);
                 market
                     .fetch_quote(WSOL)
@@ -61,8 +83,8 @@ pub async fn decode_trade(
                     .map(|p| sol * p)
             }
             Some(USDC) | Some(USDT) => {
-                let decimals = token_decimals(tx, quote_mint.unwrap()).unwrap_or(6);
-                Some(event.quote as f64 / 10_f64.powi(decimals as i32))
+                let quote_decimals = token_decimals(tx, quote_mint.unwrap()).unwrap_or(6);
+                Some(event.quote as f64 / 10_f64.powi(quote_decimals as i32))
             }
             _ => None,
         }
@@ -87,7 +109,7 @@ pub async fn decode_trade(
     })
 }
 
-fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
+fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
     // Solana transaction logs are nested. Only accept Program data emitted
     // while the corresponding DEX program is the current invocation.
     let mut invocation_stack = Vec::<&str>::new();
@@ -200,14 +222,31 @@ fn decode_event(logs: &[&str], mint: &str, tx: &Value) -> Option<Swap> {
     // PumpSwap events do not carry the base mint. Attribute an event only when
     // its trader's confirmed token-balance delta exactly matches the event's
     // base amount. Ambiguous or incomplete balance metadata is rejected.
-    let mut matched = candidates.into_iter().filter(|event| {
-        token_balance_delta(tx, mint, &event.trader) == expected_token_delta(event)
-    });
-    let event = matched.next()?;
-    if matched.next().is_some() {
-        return None;
+    // Balance deltas cover the whole transaction, so validate the sum of all
+    // candidate events per trader rather than comparing each event separately.
+    // This permits multiple swaps by one trader while rejecting incomplete or
+    // cross-token attribution when the aggregate does not reconcile exactly.
+    let mut by_trader = std::collections::HashMap::<String, Vec<Swap>>::new();
+    for event in candidates {
+        by_trader
+            .entry(event.trader.clone())
+            .or_default()
+            .push(event);
     }
-    Some(event)
+
+    let mut accepted = Vec::new();
+    for (trader, events) in by_trader {
+        let expected = events.iter().try_fold(0_i128, |total, event| {
+            total.checked_add(expected_token_delta(event)?)
+        });
+        if expected.is_some()
+            && token_balance_delta(tx, mint, &trader) == expected
+        {
+            accepted.extend(events);
+        }
+    }
+    accepted.sort_by_key(|event| event.event_index);
+    accepted
 }
 
 fn expected_token_delta(event: &Swap) -> Option<i128> {
@@ -324,7 +363,7 @@ mod tests {
         ];
         let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
         let mint = bs58::encode([1; 32]).into_string();
-        assert!(decode_event(&refs, &mint, &Value::Null).is_none());
+        assert!(decode_events(&refs, &mint, &Value::Null).is_empty());
     }
 
     #[test]
@@ -347,9 +386,10 @@ mod tests {
             "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1000"}}],
             "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1500"}}]
         }});
-        let event = decode_event(&refs, &mint, &tx).unwrap();
-        assert_eq!(event.side, "buy");
-        assert_eq!(event.base, 500);
+        let events = decode_events(&refs, &mint, &tx);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].side, "buy");
+        assert_eq!(events[0].base, 500);
     }
 
     #[test]
@@ -371,7 +411,37 @@ mod tests {
             "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1000"}}],
             "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1499"}}]
         }});
-        assert!(decode_event(&refs, &mint, &tx).is_none());
+        assert!(decode_events(&refs, &mint, &tx).is_empty());
+    }
+
+    #[test]
+    fn decodes_multiple_pumpswap_events_for_same_trader_and_mint() {
+        let mint = bs58::encode([3; 32]).into_string();
+        let trader = bs58::encode([4; 32]).into_string();
+        let mut first = vec![0_u8; 184];
+        first[..8].copy_from_slice(&[103, 244, 82, 31, 44, 245, 119, 119]);
+        first[8..16].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
+        first[16..24].copy_from_slice(&500_u64.to_le_bytes());
+        first[64..72].copy_from_slice(&250_u64.to_le_bytes());
+        first[152..184].copy_from_slice(&[4; 32]);
+        let mut second = first.clone();
+        second[16..24].copy_from_slice(&300_u64.to_le_bytes());
+        let logs = [
+            format!("Program {PUMP_SWAP} invoke [1]"),
+            format!("Program data: {}", STANDARD.encode(first)),
+            format!("Program data: {}", STANDARD.encode(second)),
+            format!("Program {PUMP_SWAP} success"),
+        ];
+        let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1000"}}],
+            "postTokenBalances": [{"mint": mint, "owner": trader, "uiTokenAmount": {"amount": "1800"}}]
+        }});
+        let events = decode_events(&refs, &mint, &tx);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].base, 500);
+        assert_eq!(events[1].base, 300);
+        assert_ne!(events[0].event_index, events[1].event_index);
     }
 
     #[test]
@@ -394,8 +464,9 @@ mod tests {
             "preTokenBalances": [{"mint": mint, "owner": bs58::encode([2; 32]).into_string(), "uiTokenAmount": {"amount": "0"}}],
             "postTokenBalances": [{"mint": mint, "owner": bs58::encode([2; 32]).into_string(), "uiTokenAmount": {"amount": "2000000"}}]
         }});
-        let event = decode_event(&refs, &mint, &tx).unwrap();
-        assert_eq!(event.side, "buy");
-        assert_eq!(event.base, 2_000_000);
+        let events = decode_events(&refs, &mint, &tx);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].side, "buy");
+        assert_eq!(events[0].base, 2_000_000);
     }
 }
