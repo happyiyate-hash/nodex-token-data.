@@ -57,6 +57,17 @@ pub async fn get_snapshot(
     // Market data is supplementary: an unavailable market provider must not
     // hide verified on-chain mint information.
     let market_quote = state.market_client.fetch_quote(&mint).await.ok().flatten();
+    let chart_points = match market_quote
+        .as_ref()
+        .and_then(|quote| quote.pair_address.as_deref())
+    {
+        Some(pool) => state
+            .market_client
+            .fetch_chart(pool, &timeframe)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
 
     let mut snapshot = TokenSnapshot::unavailable(mint.clone(), timeframe);
     snapshot.identity.name = chain_data.name.clone();
@@ -85,6 +96,11 @@ pub async fn get_snapshot(
         } else {
             "partial"
         };
+    }
+
+    snapshot.chart.points = chart_points;
+    if !snapshot.chart.points.is_empty() {
+        snapshot.data_status.chart = "available";
     }
 
     snapshot.data_status.identity =
