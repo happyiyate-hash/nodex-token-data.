@@ -74,11 +74,14 @@ impl AppState {
 
     pub fn untrack_mint(&self, mint: &str) {
         if let Ok(mut active) = self.active_mints.lock() {
-            if let Some(count) = active.get_mut(mint) {
+            let should_remove = if let Some(count) = active.get_mut(mint) {
                 *count = count.saturating_sub(1);
-                if *count == 0 {
-                    active.remove(mint);
-                }
+                *count == 0
+            } else {
+                false
+            };
+            if should_remove {
+                active.remove(mint);
             }
         }
     }
