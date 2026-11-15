@@ -86,9 +86,37 @@ pub async fn decode_trade(
 }
 
 fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
-    let pump = logs.iter().any(|line| line.contains(PUMP));
-    let pump_swap = logs.iter().any(|line| line.contains(PUMP_SWAP));
+    // Solana transaction logs are nested. Only accept Program data emitted
+    // while the corresponding DEX program is the current invocation.
+    let mut invocation_stack = Vec::<&str>::new();
+
     for line in logs {
+        if let Some(program_line) = line.strip_prefix("Program ") {
+            if let Some((program, _)) = program_line.split_once(" invoke [") {
+                invocation_stack.push(program);
+                continue;
+            }
+
+            if program_line.ends_with(" success") || program_line.contains(" failed:") {
+                let completed = program_line
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default();
+                if invocation_stack.last().copied() == Some(completed) {
+                    invocation_stack.pop();
+                } else if let Some(position) = invocation_stack
+                    .iter()
+                    .rposition(|active| *active == completed)
+                {
+                    invocation_stack.truncate(position);
+                }
+                continue;
+            }
+        }
+
+        let Some(program) = invocation_stack.last().copied() else {
+            continue;
+        };
         let Some(encoded) = line.strip_prefix("Program data: ") else {
             continue;
         };
@@ -98,45 +126,70 @@ fn decode_event(logs: &[&str], mint: &str) -> Option<Swap> {
         if bytes.len() < 8 {
             continue;
         }
-        if pump && bytes[..8] == [189, 219, 127, 211, 78, 230, 97, 238] {
+
+        if program == PUMP && bytes[..8] == [189, 219, 127, 211, 78, 230, 97, 238] {
             if bytes.len() < 97 || bs58::encode(&bytes[8..40]).into_string() != mint {
                 continue;
             }
-            let sol_raw = read_u64(&bytes, 40)?;
+            let Some(sol_raw) = read_u64(&bytes, 40) else {
+                continue;
+            };
+            let Some(base) = read_u64(&bytes, 48) else {
+                continue;
+            };
+            let Some(trader_bytes) = bytes.get(57..89) else {
+                continue;
+            };
+            let Some(time) = read_i64(&bytes, 89) else {
+                continue;
+            };
             let (quote_mint, quote_raw) = match decode_pump_quote(&bytes) {
-                Some((mint, amount))
-                    if mint != "11111111111111111111111111111111" && amount > 0 =>
+                Some((quote_mint, amount))
+                    if quote_mint != "11111111111111111111111111111111" && amount > 0 =>
                 {
-                    (mint, amount)
+                    (quote_mint, amount)
                 }
                 _ => (WSOL.to_owned(), sol_raw),
             };
             let sol = (quote_mint == WSOL).then_some(quote_raw as f64 / 1e9);
             return Some(Swap {
                 side: if bytes[56] == 1 { "buy" } else { "sell" },
-                trader: bs58::encode(&bytes[57..89]).into_string(),
-                base: read_u64(&bytes, 48)?,
+                trader: bs58::encode(trader_bytes).into_string(),
+                base,
                 quote: quote_raw,
                 quote_mint: Some(quote_mint),
                 sol,
-                time: read_i64(&bytes, 89)?,
+                time,
             });
         }
-        if pump_swap {
-            let d = &bytes[..8];
-            let buy = d == [103, 244, 82, 31, 44, 245, 119, 119];
-            let sell = d == [62, 47, 55, 10, 165, 3, 220, 42];
+
+        if program == PUMP_SWAP {
+            let discriminator = &bytes[..8];
+            let buy = discriminator == [103, 244, 82, 31, 44, 245, 119, 119];
+            let sell = discriminator == [62, 47, 55, 10, 165, 3, 220, 42];
             if (!buy && !sell) || bytes.len() < 184 {
                 continue;
             }
+            let Some(base) = read_u64(&bytes, 16) else {
+                continue;
+            };
+            let Some(quote) = read_u64(&bytes, 64) else {
+                continue;
+            };
+            let Some(trader_bytes) = bytes.get(152..184) else {
+                continue;
+            };
+            let Some(time) = read_i64(&bytes, 8) else {
+                continue;
+            };
             return Some(Swap {
                 side: if buy { "buy" } else { "sell" },
-                trader: bs58::encode(&bytes[152..184]).into_string(),
-                base: read_u64(&bytes, 16)?,
-                quote: read_u64(&bytes, 64)?,
+                trader: bs58::encode(trader_bytes).into_string(),
+                base,
+                quote,
                 quote_mint: None,
                 sol: None,
-                time: read_i64(&bytes, 8)?,
+                time,
             });
         }
     }
@@ -199,6 +252,25 @@ fn read_i64(b: &[u8], i: usize) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ignores_matching_discriminator_emitted_by_unrelated_program() {
+        let mut bytes = vec![0_u8; 97];
+        bytes[..8].copy_from_slice(&[189, 219, 127, 211, 78, 230, 97, 238]);
+        bytes[8..40].copy_from_slice(&[1; 32]);
+        bytes[40..48].copy_from_slice(&1_000_000_000_u64.to_le_bytes());
+        bytes[48..56].copy_from_slice(&2_000_000_u64.to_le_bytes());
+        bytes[56] = 1;
+        bytes[57..89].copy_from_slice(&[2; 32]);
+        bytes[89..97].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
+        let logs = [
+            "Program SomeOtherProgram111111111111111111111111111 invoke [1]".to_owned(),
+            format!("Program data: {}", STANDARD.encode(bytes)),
+            "Program SomeOtherProgram111111111111111111111111111 success".to_owned(),
+        ];
+        let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
+        assert!(decode_event(&refs, &bs58::encode([1; 32]).into_string()).is_none());
+    }
+
     #[test]
     fn decodes_pump_trade_event() {
         let mut b = vec![0_u8; 97];
