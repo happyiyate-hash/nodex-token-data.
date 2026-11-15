@@ -43,6 +43,9 @@ pub async fn get_snapshot(
                 "Token data could not be retrieved from configured Solana RPC providers".to_owned(),
             )
         })?;
+    // Market data is supplementary: an unavailable market provider must not
+    // hide verified on-chain mint information.
+    let market_quote = state.market_client.fetch_quote(&mint).await.ok().flatten();
 
     let mut snapshot = TokenSnapshot::unavailable(mint.clone(), timeframe);
     snapshot.identity.name = chain_data.name.clone();
@@ -57,6 +60,20 @@ pub async fn get_snapshot(
         _ => "Unknown token program".to_owned(),
     });
     snapshot.info.creator_address = chain_data.creator_address;
+    if let Some(quote) = market_quote {
+        snapshot.market.price_usd = quote.price_usd;
+        snapshot.market.market_cap_usd = quote.market_cap_usd;
+        snapshot.market.liquidity_usd = quote.liquidity_usd;
+        snapshot.market.change_5m_pct = quote.change_5m_pct;
+        snapshot.market.change_24h_pct = quote.change_24h_pct;
+        snapshot.market.volume_24h_usd = quote.volume_24h_usd;
+        snapshot.market.transactions_24h = quote.transactions_24h;
+        snapshot.data_status.market = if snapshot.market.price_usd.is_some() {
+            "available"
+        } else {
+            "partial"
+        };
+    }
     snapshot.data_status.identity =
         if snapshot.identity.name.is_some() && snapshot.identity.symbol.is_some() {
             "available"
