@@ -14,6 +14,7 @@ use tracing::warn;
 use crate::{
     config::AppConfig,
     market::MarketDataClient,
+    storage::MarketStore,
     providers::{ProviderClient, ProviderManager},
     stream::StreamEvent,
 };
@@ -25,6 +26,7 @@ pub struct AppState {
     pub providers: ProviderManager,
     pub provider_client: ProviderClient,
     pub market_client: MarketDataClient,
+    pub market_store: MarketStore,
     pub api_key: Arc<String>,
     pub tickets: Arc<Mutex<HashMap<String, Instant>>>,
     active_mints: Arc<Mutex<HashMap<String, usize>>>,
@@ -33,16 +35,18 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: &AppConfig) -> Result<Self> {
+    pub async fn new(config: &AppConfig) -> Result<Self> {
         let providers = ProviderManager::new(&config.providers);
         let provider_client = ProviderClient::new(providers.clone())?;
         let market_client = MarketDataClient::new()?;
+        let market_store = MarketStore::connect(&config.database_url).await?;
         let (stream_tx, _) = broadcast::channel(2048);
 
         Ok(Self {
             providers,
             provider_client,
             market_client,
+            market_store,
             api_key: Arc::new(config.api_key.clone()),
             tickets: Arc::new(Mutex::new(HashMap::new())),
             active_mints: Arc::new(Mutex::new(HashMap::new())),
@@ -160,18 +164,19 @@ mod tests {
     use crate::config::AppConfig;
     use std::net::SocketAddr;
 
-    fn test_state() -> AppState {
+    async fn test_state() -> AppState {
         let config = AppConfig {
             bind_addr: "127.0.0.1:8081".parse::<SocketAddr>().unwrap(),
             api_key: "a".repeat(32),
+            database_url: "sqlite::memory:".to_owned(),
             providers: Vec::new(),
         };
-        AppState::new(&config).unwrap()
+        AppState::new(&config).await.unwrap()
     }
 
-    #[test]
-    fn tracked_mints_use_reference_counts() {
-        let state = test_state();
+    #[tokio::test]
+    async fn tracked_mints_use_reference_counts() {
+        let state = test_state().await;
         assert!(state.track_mint("mint-a"));
         assert!(state.track_mint("mint-a"));
         assert_eq!(state.active_mints(), vec!["mint-a".to_owned()]);
@@ -183,16 +188,16 @@ mod tests {
         assert!(state.active_mints().is_empty());
     }
 
-    #[test]
-    fn untracking_unknown_mint_is_safe() {
-        let state = test_state();
+    #[tokio::test]
+    async fn untracking_unknown_mint_is_safe() {
+        let state = test_state().await;
         state.untrack_mint("unknown");
         assert!(state.active_mints().is_empty());
     }
 
-    #[test]
-    fn caps_unique_active_mints_at_five_hundred() {
-        let state = test_state();
+    #[tokio::test]
+    async fn caps_unique_active_mints_at_five_hundred() {
+        let state = test_state().await;
         for index in 0..MAX_ACTIVE_MARKET_MINTS {
             assert!(state.track_mint(&format!("mint-{index}")));
         }
