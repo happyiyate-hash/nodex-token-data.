@@ -61,14 +61,11 @@ impl ProviderManager {
         if provider.websocket_endpoints.is_empty() {
             return Vec::new();
         }
-        let start = provider
-            .websocket_cursor
-            .fetch_add(1, Ordering::Relaxed)
+        let start = provider.websocket_cursor.fetch_add(1, Ordering::Relaxed)
             % provider.websocket_endpoints.len();
         (0..provider.websocket_endpoints.len())
             .map(|offset| {
-                provider.websocket_endpoints
-                    [(start + offset) % provider.websocket_endpoints.len()]
+                provider.websocket_endpoints[(start + offset) % provider.websocket_endpoints.len()]
                     .clone()
             })
             .collect()
