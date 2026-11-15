@@ -189,13 +189,14 @@ pub async fn run_connection(
                             let _permit = permit;
                             match state.provider_client.fetch_transaction(&signature).await {
                                 Ok(transaction) => {
-                                    if let Some(trade) = super::swap_decoder::decode_trade(
+                                    let trades = super::swap_decoder::decode_trades(
                                         &mint,
                                         &signature,
                                         &transaction,
                                         &logs,
                                         &state.market_client,
-                                    ).await {
+                                    ).await;
+                                    for trade in trades {
                                         if let Err(error) = state.publish_confirmed_trade(&mint, trade).await {
                                             warn!(provider, mint, error = %error, "Could not persist decoded swap");
                                         }
