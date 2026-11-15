@@ -272,9 +272,9 @@ fn store_cache<T: Clone>(
     let now = Instant::now();
     cache.retain(|_, (expires_at, _)| *expires_at > now);
 
-    if cache.len() >= MAX_CACHE_ENTRIES && !cache.contains_key(&key) {
-        if let Some(oldest_key) = cache.keys().next().cloned() {
-            cache.remove(&oldest_key);
+    if cache.len() >= MAX_CACHE_ENTRIES {
+        if let Some(evicted_key) = cache.keys().find(|candidate| *candidate != &key).cloned() {
+            cache.remove(&evicted_key);
         }
     }
     cache.insert(key, (now + Duration::from_secs(60), value));
