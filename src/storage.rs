@@ -2,6 +2,7 @@ use std::{path::Path, str::FromStr, time::Duration};
 
 use anyhow::{Context, Result};
 use sqlx::{
+    Row,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
 };
@@ -54,6 +55,14 @@ impl MarketStore {
         )
         .execute(&pool)
         .await?;
+        let trade_columns = sqlx::query("PRAGMA table_info(market_trades)").fetch_all(&pool).await?;
+        let has_amount_sol = trade_columns.iter().any(|row| {
+            row.try_get::<String, _>("name").ok().as_deref() == Some("amount_sol")
+        });
+        if !has_amount_sol {
+            sqlx::query("ALTER TABLE market_trades ADD COLUMN amount_sol REAL").execute(&pool).await?;
+        }
+
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_market_trades_mint_time
              ON market_trades(mint, timestamp_ms DESC)",
