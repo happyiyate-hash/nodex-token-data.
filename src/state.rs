@@ -236,8 +236,10 @@ impl AppState {
             for mint in self.subscribed_mints() {
                 match self.provider_client.fetch_holders_for_mint(&mint).await {
                     Ok(holders) => {
-                        let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)
-                            .unwrap_or_default().as_millis() as u64;
+                        let timestamp_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
                         let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
                         match serde_json::to_value(holders) {
                             Ok(data) => self.publish(StreamEvent {
@@ -248,7 +250,9 @@ impl AppState {
                                 timestamp_ms,
                                 data,
                             }),
-                            Err(error) => warn!(mint, error = %error, "Could not serialize holder update"),
+                            Err(error) => {
+                                warn!(mint, error = %error, "Could not serialize holder update")
+                            }
                         }
                     }
                     Err(error) => warn!(mint, error = %error, "Holder refresh failed"),
