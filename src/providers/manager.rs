@@ -12,7 +12,8 @@ struct ProviderPool {
     name: &'static str,
     endpoints: Vec<String>,
     websocket_endpoints: Vec<String>,
-    cursor: AtomicUsize,
+    rpc_cursor: AtomicUsize,
+    websocket_cursor: AtomicUsize,
 }
 #[derive(Clone, Debug)]
 pub struct SelectedEndpoint {
@@ -34,36 +35,56 @@ impl ProviderManager {
                 name: c.name,
                 endpoints: c.endpoints.clone(),
                 websocket_endpoints: c.websocket_endpoints.clone(),
-                cursor: AtomicUsize::new(0),
+                rpc_cursor: AtomicUsize::new(0),
+                websocket_cursor: AtomicUsize::new(0),
             })
             .collect();
         Self {
             providers: Arc::new(providers),
         }
     }
+
     pub fn next_endpoint(&self, name: &str) -> Option<SelectedEndpoint> {
         let p = self.providers.iter().find(|p| p.name == name)?;
-        let i = p.cursor.fetch_add(1, Ordering::Relaxed) % p.endpoints.len();
+        let i = p.rpc_cursor.fetch_add(1, Ordering::Relaxed) % p.endpoints.len();
         Some(SelectedEndpoint {
             url: p.endpoints[i].clone(),
         })
     }
+
+    /// Returns configured WebSocket endpoints starting at the next key in the
+    /// provider's independent round-robin sequence.
     pub fn websocket_endpoints(&self, name: &str) -> Vec<String> {
-        self.providers
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| p.websocket_endpoints.clone())
-            .unwrap_or_default()
+        let Some(provider) = self.providers.iter().find(|p| p.name == name) else {
+            return Vec::new();
+        };
+        if provider.websocket_endpoints.is_empty() {
+            return Vec::new();
+        }
+        let start = provider
+            .websocket_cursor
+            .fetch_add(1, Ordering::Relaxed)
+            % provider.websocket_endpoints.len();
+        (0..provider.websocket_endpoints.len())
+            .map(|offset| {
+                provider.websocket_endpoints
+                    [(start + offset) % provider.websocket_endpoints.len()]
+                    .clone()
+            })
+            .collect()
     }
+
     pub fn provider_names(&self) -> Vec<&'static str> {
         self.providers.iter().map(|p| p.name).collect()
     }
+
     pub fn configured_key_count(&self, name: &str) -> usize {
         self.providers
             .iter()
             .find(|p| p.name == name)
             .map_or(0, |p| p.endpoints.len())
     }
+
     pub fn statuses(&self) -> Vec<ProviderStatus> {
         self.providers
             .iter()
@@ -74,13 +95,16 @@ impl ProviderManager {
             })
             .collect()
     }
+
     pub fn has_providers(&self) -> bool {
         !self.providers.is_empty()
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn preserves_provider_priority() {
         let manager = ProviderManager::new(&[
@@ -97,5 +121,22 @@ mod tests {
         ]);
         assert_eq!(manager.provider_names(), vec!["helius", "fluxrpc"]);
         assert_eq!(manager.websocket_endpoints("fluxrpc"), vec!["fw"]);
+    }
+
+    #[test]
+    fn websocket_keys_rotate_independently_and_cover_all_keys() {
+        let manager = ProviderManager::new(&[ProviderConfig {
+            name: "helius",
+            endpoints: vec!["h1".into(), "h2".into(), "h3".into()],
+            websocket_endpoints: vec!["w1".into(), "w2".into(), "w3".into()],
+        }]);
+        assert_eq!(
+            manager.websocket_endpoints("helius"),
+            vec!["w1", "w2", "w3"]
+        );
+        assert_eq!(
+            manager.websocket_endpoints("helius"),
+            vec!["w2", "w3", "w1"]
+        );
     }
 }
