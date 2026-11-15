@@ -57,7 +57,7 @@ pub async fn get_snapshot(
     // Market data is supplementary: an unavailable market provider must not
     // hide verified on-chain mint information.
     let market_quote = state.market_client.fetch_quote(&mint).await.ok().flatten();
-    let chart_points = match market_quote
+    let provider_chart_points = match market_quote
         .as_ref()
         .and_then(|quote| quote.pair_address.as_deref())
     {
@@ -68,6 +68,16 @@ pub async fn get_snapshot(
             .unwrap_or_default(),
         None => Vec::new(),
     };
+    if !provider_chart_points.is_empty() {
+        state.market_store.seed_historical_candles(&mint, &timeframe, &provider_chart_points).await.map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Historical chart data could not be stored".to_owned(),
+        ))?;
+    }
+    let chart_points = state.market_store.load_candles(&mint, &timeframe, 1000).await.map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Stored chart data could not be loaded".to_owned(),
+    ))?;
     let recent_trades = match market_quote
         .as_ref()
         .and_then(|quote| quote.pair_address.as_deref())
