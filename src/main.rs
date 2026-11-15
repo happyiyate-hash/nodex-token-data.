@@ -1,7 +1,7 @@
 mod api;
 mod config;
-mod middleware;
 mod market;
+mod middleware;
 mod models;
 mod providers;
 mod state;
@@ -18,11 +18,7 @@ use axum::{
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::{
-    config::AppConfig,
-    middleware::require_api_key,
-    state::AppState,
-};
+use crate::{config::AppConfig, middleware::require_api_key, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
