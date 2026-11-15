@@ -214,6 +214,9 @@ impl MarketStore {
 
 fn candle_intervals() -> [(&'static str, i64); 6] {
     [
+        ("1S", 1_000),
+        ("5S", 5_000),
+        ("10S", 10_000),
         ("1M", 60_000),
         ("5M", 300_000),
         ("15M", 900_000),
@@ -278,8 +281,8 @@ mod tests {
     #[test]
     fn candle_intervals_are_consistent() {
         let intervals = candle_intervals();
-        assert_eq!(intervals[0], ("1M", 60_000));
-        assert_eq!(intervals[5], ("24H", 86_400_000));
+        assert_eq!(intervals[0], ("1S", 1_000));
+        assert_eq!(intervals[8], ("24H", 86_400_000));
         for (_, interval) in intervals {
             assert!(interval > 0);
         }
