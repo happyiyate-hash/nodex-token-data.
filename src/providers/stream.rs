@@ -200,10 +200,7 @@ pub async fn run_connection(
     }
 }
 
-
-fn acquire_fetch_permit(
-    semaphore: &Arc<Semaphore>,
-) -> Result<OwnedSemaphorePermit> {
+fn acquire_fetch_permit(semaphore: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit> {
     semaphore
         .clone()
         .try_acquire_owned()
