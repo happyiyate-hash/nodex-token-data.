@@ -10,12 +10,14 @@ pub struct ProviderManager {
     providers: Arc<Vec<ProviderPool>>,
 }
 
+#[allow(dead_code)]
 struct ProviderPool {
     name: &'static str,
     endpoints: Vec<String>,
     cursor: AtomicUsize,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SelectedEndpoint {
     pub provider: &'static str,
@@ -48,8 +50,12 @@ impl ProviderManager {
     /// Selects the next configured key for a provider using atomic round-robin
     /// rotation. Callers should avoid logging the returned URL because it
     /// contains the provider credential.
+    #[allow(dead_code)]
     pub fn next_endpoint(&self, provider_name: &str) -> Option<SelectedEndpoint> {
-        let pool = self.providers.iter().find(|pool| pool.name == provider_name)?;
+        let pool = self
+            .providers
+            .iter()
+            .find(|pool| pool.name == provider_name)?;
         let index = pool.cursor.fetch_add(1, Ordering::Relaxed) % pool.endpoints.len();
 
         Some(SelectedEndpoint {
