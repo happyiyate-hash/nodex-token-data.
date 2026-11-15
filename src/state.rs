@@ -14,10 +14,10 @@ use tracing::warn;
 use crate::{
     config::AppConfig,
     market::MarketDataClient,
+    models::Trade,
     providers::{ProviderClient, ProviderManager},
     storage::MarketStore,
     stream::StreamEvent,
-    models::Trade,
 };
 
 const MAX_ACTIVE_MARKET_MINTS: usize = 500;
@@ -152,18 +152,45 @@ impl AppState {
     }
 
     pub async fn publish_confirmed_trade(&self, mint: &str, trade: Trade) -> Result<()> {
-        if !self.market_store.record_confirmed_trade(mint, &trade).await? { return Ok(()); }
+        if !self
+            .market_store
+            .record_confirmed_trade(mint, &trade)
+            .await?
+        {
+            return Ok(());
+        }
         let timestamp_ms = trade.timestamp_ms.max(0) as u64;
         let data = serde_json::to_value(&trade)?;
         let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-        self.publish(StreamEvent { event: "trade_update".into(), mint: mint.into(), topic: "token.trades".into(), sequence, timestamp_ms, data: data.clone() });
+        self.publish(StreamEvent {
+            event: "trade_update".into(),
+            mint: mint.into(),
+            topic: "token.trades".into(),
+            sequence,
+            timestamp_ms,
+            data: data.clone(),
+        });
         let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-        self.publish(StreamEvent { event: "activity_update".into(), mint: mint.into(), topic: "token.activity".into(), sequence, timestamp_ms, data });
+        self.publish(StreamEvent {
+            event: "activity_update".into(),
+            mint: mint.into(),
+            topic: "token.activity".into(),
+            sequence,
+            timestamp_ms,
+            data,
+        });
         for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
             if let Ok(points) = self.market_store.load_candles(mint, timeframe, 1).await {
                 if let Some(candle) = points.last() {
                     let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-                    self.publish(StreamEvent { event: "candle_update".into(), mint: mint.into(), topic: "token.chart".into(), sequence, timestamp_ms, data: serde_json::json!({"timeframe": timeframe, "candle": candle}) });
+                    self.publish(StreamEvent {
+                        event: "candle_update".into(),
+                        mint: mint.into(),
+                        topic: "token.chart".into(),
+                        sequence,
+                        timestamp_ms,
+                        data: serde_json::json!({"timeframe": timeframe, "candle": candle}),
+                    });
                 }
             }
         }
@@ -172,16 +199,29 @@ impl AppState {
 
     pub async fn publish_chart_snapshot(&self, mint: &str, timeframe: &str) -> Result<()> {
         let quote = self.market_client.fetch_quote(mint).await.ok().flatten();
-        let pair = quote.as_ref().and_then(|value| value.pair_address.as_deref());
+        let pair = quote
+            .as_ref()
+            .and_then(|value| value.pair_address.as_deref());
         let points = crate::components::chart_data::fetch(
-            mint, timeframe, pair, &self.market_client, &self.market_store
-        ).await?;
-        let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)
-            .unwrap_or_default().as_millis() as u64;
+            mint,
+            timeframe,
+            pair,
+            &self.market_client,
+            &self.market_store,
+        )
+        .await?;
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.publish(StreamEvent {
-            event: "chart_snapshot".into(), mint: mint.into(), topic: "token.chart".into(),
-            sequence, timestamp_ms, data: serde_json::json!({"timeframe": timeframe, "points": points}),
+            event: "chart_snapshot".into(),
+            mint: mint.into(),
+            topic: "token.chart".into(),
+            sequence,
+            timestamp_ms,
+            data: serde_json::json!({"timeframe": timeframe, "points": points}),
         });
         Ok(())
     }
