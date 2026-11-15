@@ -50,7 +50,8 @@ impl MarketDataClient {
             http,
             chart_cache: Arc::new(Mutex::new(HashMap::new())),
             trades_cache: Arc::new(Mutex::new(HashMap::new())),
-            quote_cache: Arc::new(Mutex::new(HashMap::new())),            gecko_request_gate: Arc::new(tokio::sync::Mutex::new(None)),
+            quote_cache: Arc::new(Mutex::new(HashMap::new())),
+            gecko_request_gate: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -138,7 +139,9 @@ impl MarketDataClient {
     pub async fn fetch_quote(&self, mint: &str) -> Result<Option<MarketQuote>> {
         if let Ok(cache) = self.quote_cache.lock() {
             if let Some((expires, quote)) = cache.get(mint) {
-                if *expires > Instant::now() { return Ok(quote.clone()); }
+                if *expires > Instant::now() {
+                    return Ok(quote.clone());
+                }
             }
         }
         let mints = vec![mint.to_owned()];
@@ -147,13 +150,21 @@ impl MarketDataClient {
                 let quote = quotes.get(mint).cloned();
                 if let Ok(mut cache) = self.quote_cache.lock() {
                     if cache.len() >= 500 {
-                        if let Some(key) = cache.keys().next().cloned() { cache.remove(&key); }
+                        if let Some(key) = cache.keys().next().cloned() {
+                            cache.remove(&key);
+                        }
                     }
-                    cache.insert(mint.to_owned(), (Instant::now() + Duration::from_secs(5), quote.clone()));
+                    cache.insert(
+                        mint.to_owned(),
+                        (Instant::now() + Duration::from_secs(5), quote.clone()),
+                    );
                 }
                 Ok(quote)
             }
-            Err(error) => { warn!(error = %error, "Market-data snapshot lookup failed"); Err(error) }
+            Err(error) => {
+                warn!(error = %error, "Market-data snapshot lookup failed");
+                Err(error)
+            }
         }
     }
 
