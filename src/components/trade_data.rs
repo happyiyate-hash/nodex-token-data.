@@ -20,7 +20,7 @@ pub async fn fetch(
         }
     }
     let mut result = trades.into_values().collect::<Vec<_>>();
-    result.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+    result.sort_by_key(|trade| std::cmp::Reverse(trade.timestamp_ms));
     result.truncate(100);
     Ok(result)
 }
