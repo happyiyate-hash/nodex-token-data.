@@ -203,7 +203,7 @@ impl MarketDataClient {
 
     /// Retrieves recent pool swaps from GeckoTerminal. Amounts are reported
     /// as token amounts; the counter-asset is not mislabeled as SOL.
-    pub async fn fetch_trades(&self, pool: &str) -> Result<Vec<crate::models::Trade>> {
+    pub async fn fetch_trades(&self, pool: &str) -> Result<Vec<Trade>> {
         let cache_key = pool.to_owned();
         if let Ok(cache) = self.trades_cache.lock() {
             if let Some((expires_at, trades)) = cache.get(&cache_key) {
@@ -266,7 +266,7 @@ impl MarketDataClient {
     }
 }
 
-fn parse_trade(row: &Value) -> Option<crate::models::Trade> {
+fn parse_trade(row: &Value) -> Option<Trade> {
     let attributes = row.get("attributes")?;
     let side = attributes.get("kind")?.as_str()?;
     if !matches!(side, "buy" | "sell") {
@@ -287,7 +287,7 @@ fn parse_trade(row: &Value) -> Option<crate::models::Trade> {
         .ok()?
         .timestamp_millis();
 
-    Some(crate::models::Trade {
+    Some(Trade {
         signature: attributes.get("tx_hash")?.as_str()?.to_owned(),
         side: side.to_owned(),
         trader: attributes
