@@ -324,7 +324,7 @@ impl AppState {
 mod tests {
     use super::{AppState, MAX_ACTIVE_MARKET_MINTS};
     use crate::config::AppConfig;
-    use std::net::SocketAddr;
+    use std::{net::SocketAddr, time::Duration};
 
     async fn test_state() -> AppState {
         let config = AppConfig {
