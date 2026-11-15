@@ -297,6 +297,7 @@ fn parse_trade(row: &Value) -> Option<crate::models::Trade> {
         amount_sol: None,
         token_amount,
         price_usd,
+        volume_usd: parse_number(attributes.get("volume_in_usd")),
         timestamp_ms,
     })
 }
@@ -423,6 +424,7 @@ mod tests {
         assert_eq!(trade.side, "buy");
         assert_eq!(trade.token_amount, Some(123.5));
         assert_eq!(trade.price_usd, Some(0.004));
+        assert_eq!(trade.volume_usd, None);
         assert_eq!(trade.amount_sol, None);
         assert_eq!(trade.trader.as_deref(), Some("wallet"));
     }
