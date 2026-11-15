@@ -83,6 +83,7 @@ pub struct HoldersSnapshot {
 #[derive(Clone, Debug, Serialize)]
 pub struct Holder {
     pub address: String,
+    pub token_account: Option<String>,
     pub token_amount: f64,
     pub supply_pct: Option<f64>,
     pub rank: u32,
