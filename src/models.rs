@@ -64,6 +64,7 @@ pub struct TradesSnapshot {
 #[derive(Clone, Debug, Serialize)]
 pub struct Trade {
     pub signature: String,
+    pub event_index: u32,
     pub side: String,
     pub trader: Option<String>,
     pub amount_sol: Option<f64>,
