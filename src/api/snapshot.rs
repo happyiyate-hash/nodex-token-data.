@@ -12,9 +12,7 @@ pub struct SnapshotQuery {
     pub timeframe: Option<String>,
 }
 
-const TIMEFRAMES: &[&str] = &[
-    "1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H",
-];
+const TIMEFRAMES: &[&str] = &["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"];
 const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 fn is_valid_mint(mint: &str) -> bool {
@@ -69,15 +67,27 @@ pub async fn get_snapshot(
         None => Vec::new(),
     };
     if !provider_chart_points.is_empty() {
-        state.market_store.seed_historical_candles(&mint, &timeframe, &provider_chart_points).await.map_err(|_| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Historical chart data could not be stored".to_owned(),
-        ))?;
+        state
+            .market_store
+            .seed_historical_candles(&mint, &timeframe, &provider_chart_points)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Historical chart data could not be stored".to_owned(),
+                )
+            })?;
     }
-    let chart_points = state.market_store.load_candles(&mint, &timeframe, 1000).await.map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Stored chart data could not be loaded".to_owned(),
-    ))?;
+    let chart_points = state
+        .market_store
+        .load_candles(&mint, &timeframe, 1000)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Stored chart data could not be loaded".to_owned(),
+            )
+        })?;
     let recent_trades = match market_quote
         .as_ref()
         .and_then(|quote| quote.pair_address.as_deref())
