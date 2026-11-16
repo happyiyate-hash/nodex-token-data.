@@ -384,7 +384,10 @@ impl AppState {
     pub async fn publish_chart_snapshot(&self, mint: &str, timeframe: &str) -> Result<()> {
         // Timeframe changes are served from the local durable candle store.
         // They must not trigger another third-party history-provider request.
-        let points = self.market_store.load_candles(mint, timeframe, 5000).await?;
+        let points = self
+            .market_store
+            .load_candles(mint, timeframe, 5000)
+            .await?;
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
