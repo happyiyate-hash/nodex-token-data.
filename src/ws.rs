@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashSet,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     extract::{
@@ -11,7 +14,9 @@ use futures_util::{Sink, SinkExt, StreamExt};
 use serde_json::json;
 
 use crate::{
-    components::{chart_data, creator_data, holder_data, market_data, token_identity, token_info, trade_data},
+    components::{
+        chart_data, creator_data, holder_data, market_data, token_identity, token_info, trade_data,
+    },
     state::AppState,
     stream::{ClientCommand, TOPICS},
 };
@@ -225,7 +230,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 }
 
-
 /// Delivers a token snapshot progressively on the requesting WebSocket.
 /// Market/identity/holder/trade sections are independent messages; chart history
 /// is sent in bounded oldest-first chunks and has an explicit completion marker.
@@ -243,49 +247,75 @@ where
         .unwrap_or_default()
         .as_millis() as u64;
 
-    send_json(sender, json!({
-        "event": "snapshot_started",
-        "snapshot_id": snapshot_id,
-        "mint": mint,
-        "timeframe": timeframe
-    })).await?;
+    send_json(
+        sender,
+        json!({
+            "event": "snapshot_started",
+            "snapshot_id": snapshot_id,
+            "mint": mint,
+            "timeframe": timeframe
+        }),
+    )
+    .await?;
 
     let chain = match state.provider_client.fetch_token_chain_data(mint).await {
         Ok(chain) => chain,
         Err(_) => {
-            send_json(sender, json!({
-                "event": "snapshot_error",
-                "snapshot_id": snapshot_id,
-                "mint": mint,
-                "message": "Token mint data could not be retrieved from configured Solana RPC providers"
-            })).await?;
+            send_json(
+                sender,
+                json!({
+                    "event": "snapshot_error",
+                    "snapshot_id": snapshot_id,
+                    "mint": mint,
+                    "message": "Token mint data could not be retrieved from configured Solana RPC providers"
+                }),
+            )
+            .await?;
             return Ok(());
         }
     };
 
     let identity = token_identity::from_chain(mint, &chain, None);
     let info = token_info::from_chain(&chain);
-    send_json(sender, json!({
-        "event": "snapshot_section", "snapshot_id": snapshot_id,
-        "mint": mint, "topic": "token.info", "data": info
-    })).await?;
-    send_json(sender, json!({
-        "event": "snapshot_section", "snapshot_id": snapshot_id,
-        "mint": mint, "topic": "token.identity", "data": identity
-    })).await?;
+    send_json(
+        sender,
+        json!({
+            "event": "snapshot_section", "snapshot_id": snapshot_id,
+            "mint": mint, "topic": "token.info", "data": info
+        }),
+    )
+    .await?;
+    send_json(
+        sender,
+        json!({
+            "event": "snapshot_section", "snapshot_id": snapshot_id,
+            "mint": mint, "topic": "token.identity", "data": identity
+        }),
+    )
+    .await?;
 
     let (quote_result, holders_result, created_result) = tokio::join!(
         market_data::fetch(mint, &state.market_client),
-        holder_data::fetch(mint, &chain.total_supply, chain.decimals, &state.provider_client),
+        holder_data::fetch(
+            mint,
+            &chain.total_supply,
+            chain.decimals,
+            &state.provider_client
+        ),
         state.provider_client.fetch_mint_created_at(mint),
     );
     let quote = quote_result.ok().flatten();
     let holders = holders_result.ok();
     let created_at = created_result.ok().flatten();
-    let pair = quote.as_ref().and_then(|value| value.pair_address.as_deref());
+    let pair = quote
+        .as_ref()
+        .and_then(|value| value.pair_address.as_deref());
 
-    let (buy_volume, sell_volume, buy_count, sell_count) =
-        state.market_store.load_trade_totals_24h(mint).await.unwrap_or((None, None, 0, 0));
+    let (buy_volume, sell_volume, buy_count, sell_count) = state
+        .market_store
+        .load_trade_totals_24h(mint)
+        .await
+        .unwrap_or((None, None, 0, 0));
     let buy_pressure_pct = match (buy_volume, sell_volume) {
         (Some(buy), Some(sell)) if buy + sell > 0.0 => Some(buy / (buy + sell) * 100.0),
         (Some(buy), None) if sell_count == 0 && buy > 0.0 => Some(100.0),
@@ -314,85 +344,133 @@ where
             "transactions_24h": buy_count + sell_count
         })
     };
-    send_json(sender, json!({
-        "event": "snapshot_section", "snapshot_id": snapshot_id,
-        "mint": mint, "topic": "token.market", "data": market
-    })).await?;
+    send_json(
+        sender,
+        json!({
+            "event": "snapshot_section", "snapshot_id": snapshot_id,
+            "mint": mint, "topic": "token.market", "data": market
+        }),
+    )
+    .await?;
 
     if let Some(holders) = holders {
-        send_json(sender, json!({
-            "event": "snapshot_section", "snapshot_id": snapshot_id,
-            "mint": mint, "topic": "token.holders", "data": holders
-        })).await?;
+        send_json(
+            sender,
+            json!({
+                "event": "snapshot_section", "snapshot_id": snapshot_id,
+                "mint": mint, "topic": "token.holders", "data": holders
+            }),
+        )
+        .await?;
     }
     let mut identity = identity;
     identity.created_at = created_at;
     identity.creator_address = creator_data::creator_address(&chain);
-    send_json(sender, json!({
-        "event": "snapshot_section", "snapshot_id": snapshot_id,
-        "mint": mint, "topic": "token.identity", "data": identity
-    })).await?;
+    send_json(
+        sender,
+        json!({
+            "event": "snapshot_section", "snapshot_id": snapshot_id,
+            "mint": mint, "topic": "token.identity", "data": identity
+        }),
+    )
+    .await?;
 
-    send_json(sender, json!({
-        "event": "chart_history_started",
-        "snapshot_id": snapshot_id,
-        "mint": mint,
-        "topic": "token.chart",
-        "data": {"timeframe": timeframe}
-    })).await?;
+    send_json(
+        sender,
+        json!({
+            "event": "chart_history_started",
+            "snapshot_id": snapshot_id,
+            "mint": mint,
+            "topic": "token.chart",
+            "data": {"timeframe": timeframe}
+        }),
+    )
+    .await?;
 
-    match chart_data::fetch(mint, timeframe, pair, &state.market_client, &state.market_store).await {
+    match chart_data::fetch(
+        mint,
+        timeframe,
+        pair,
+        &state.market_client,
+        &state.market_store,
+    )
+    .await
+    {
         Ok(points) => {
             const CHUNK_SIZE: usize = 500;
             let total_chunks = points.len().div_ceil(CHUNK_SIZE);
             for (chunk_index, chunk) in points.chunks(CHUNK_SIZE).enumerate() {
-                send_json(sender, json!({
-                    "event": "chart_history_chunk",
+                send_json(
+                    sender,
+                    json!({
+                        "event": "chart_history_chunk",
+                        "snapshot_id": snapshot_id,
+                        "mint": mint,
+                        "topic": "token.chart",
+                        "data": {
+                            "timeframe": timeframe,
+                            "chunk_index": chunk_index,
+                            "total_chunks": total_chunks,
+                            "points": chunk
+                        }
+                    }),
+                )
+                .await?;
+            }
+            send_json(
+                sender,
+                json!({
+                    "event": "chart_history_completed",
                     "snapshot_id": snapshot_id,
                     "mint": mint,
                     "topic": "token.chart",
-                    "data": {
-                        "timeframe": timeframe,
-                        "chunk_index": chunk_index,
-                        "total_chunks": total_chunks,
-                        "points": chunk
-                    }
-                })).await?;
-            }
-            send_json(sender, json!({
-                "event": "chart_history_completed",
-                "snapshot_id": snapshot_id,
-                "mint": mint,
-                "topic": "token.chart",
-                "data": {"timeframe": timeframe, "point_count": points.len(), "status": if points.is_empty() {"unavailable"} else {"available"}}
-            })).await?;
+                    "data": {"timeframe": timeframe, "point_count": points.len(), "status": if points.is_empty() {"unavailable"} else {"available"}}
+                }),
+            )
+            .await?;
         }
         Err(error) => {
             tracing::warn!(mint, timeframe, error = %error, "Progressive chart history request failed");
-            send_json(sender, json!({
-                "event": "chart_history_completed",
-                "snapshot_id": snapshot_id,
-                "mint": mint,
-                "topic": "token.chart",
-                "data": {"timeframe": timeframe, "point_count": 0, "status": "unavailable"}
-            })).await?;
+            send_json(
+                sender,
+                json!({
+                    "event": "chart_history_completed",
+                    "snapshot_id": snapshot_id,
+                    "mint": mint,
+                    "topic": "token.chart",
+                    "data": {"timeframe": timeframe, "point_count": 0, "status": "unavailable"}
+                }),
+            )
+            .await?;
         }
     }
 
     match trade_data::fetch(mint, pair, &state.market_client, &state.market_store).await {
-        Ok(trades) => send_json(sender, json!({
-            "event": "snapshot_section", "snapshot_id": snapshot_id,
-            "mint": mint, "topic": "token.trades", "data": {"recent": trades}
-        })).await?,
-        Err(error) => tracing::warn!(mint, error = %error, "Progressive trade snapshot request failed"),
+        Ok(trades) => {
+            send_json(
+                sender,
+                json!({
+                    "event": "snapshot_section", "snapshot_id": snapshot_id,
+                    "mint": mint, "topic": "token.trades", "data": {"recent": trades}
+                }),
+            )
+            .await?
+        }
+        Err(error) => {
+            tracing::warn!(mint, error = %error, "Progressive trade snapshot request failed")
+        }
     }
 
-    send_json(sender, json!({
-        "event": "snapshot_completed",
-        "snapshot_id": snapshot_id,
-        "mint": mint,
-        "timeframe": timeframe
-    })).await
+    send_json(
+        sender,
+        json!({
+            "event": "snapshot_completed",
+            "snapshot_id": snapshot_id,
+            "mint": mint,
+            "timeframe": timeframe
+        }),
+    )
+    .await
 }
 
 async fn send_json<S>(sender: &mut S, value: serde_json::Value) -> Result<(), ()>
