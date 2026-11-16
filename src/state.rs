@@ -207,13 +207,16 @@ impl AppState {
                             };
                             // External quotes refresh slower reference fields, but must
                             // never overwrite a more recent confirmed on-chain trade price.
-                            if let Some(onchain_price) =
-                                self.market_engine.lock().await.latest_price(&quote.mint)
-                            {
+                            let (onchain_price, onchain_market_cap) = {
+                                let engine = self.market_engine.lock().await;
+                                (
+                                    engine.latest_price(&quote.mint),
+                                    engine.market_cap_usd(&quote.mint),
+                                )
+                            };
+                            if let Some(onchain_price) = onchain_price {
                                 data["price_usd"] = serde_json::json!(onchain_price);
-                                if let Some(market_cap) =
-                                    self.market_engine.lock().await.market_cap_usd(&quote.mint)
-                                {
+                                if let Some(market_cap) = onchain_market_cap {
                                     data["market_cap_usd"] = serde_json::json!(market_cap);
                                 }
                                 data["price_source"] = serde_json::json!("confirmed_onchain");
