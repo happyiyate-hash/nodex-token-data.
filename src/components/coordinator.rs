@@ -73,6 +73,22 @@ pub async fn load_snapshot(
     snapshot.holders = holders;
     snapshot.chart.points = chart;
     snapshot.trades.recent = trades;
+    let (buy_volume, sell_volume, buy_count, sell_count) = state
+        .market_store
+        .load_trade_totals_24h(mint)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Confirmed trade totals could not be loaded".to_owned()))?;
+    snapshot.market.buy_volume_usd = buy_volume;
+    snapshot.market.sell_volume_usd = sell_volume;
+    snapshot.market.buy_pressure_pct = match (buy_volume, sell_volume) {
+        (Some(buy), Some(sell)) if buy + sell > 0.0 => Some(buy / (buy + sell) * 100.0),
+        (Some(buy), None) if buy > 0.0 => Some(100.0),
+        (None, Some(sell)) if sell > 0.0 => Some(0.0),
+        _ => None,
+    };
+    if snapshot.market.transactions_24h.is_none() {
+        snapshot.market.transactions_24h = Some(buy_count + sell_count);
+    }
 
     if let Some(quote) = quote {
         snapshot.market.price_usd = quote.price_usd;
