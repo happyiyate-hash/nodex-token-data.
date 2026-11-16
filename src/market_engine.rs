@@ -24,6 +24,7 @@ struct CandleState {
 #[derive(Default)]
 struct TokenCandles {
     last_price: Option<f64>,
+    total_supply: Option<f64>,
     candles: BTreeMap<(String, i64), CandleState>,
 }
 
@@ -112,6 +113,18 @@ impl MarketEngine {
             }
         }
         changed
+    }
+
+    pub fn set_total_supply(&mut self, mint: &str, total_supply: f64) {
+        if total_supply.is_finite() && total_supply > 0.0 {
+            self.tokens.entry(mint.to_owned()).or_default().total_supply = Some(total_supply);
+        }
+    }
+
+    pub fn market_cap_usd(&self, mint: &str) -> Option<f64> {
+        let state = self.tokens.get(mint)?;
+        let market_cap = state.last_price? * state.total_supply?;
+        (market_cap.is_finite() && market_cap > 0.0).then_some(market_cap)
     }
 
     pub fn latest_price(&self, mint: &str) -> Option<f64> {
