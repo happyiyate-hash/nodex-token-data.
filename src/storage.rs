@@ -215,10 +215,8 @@ impl MarketStore {
             .bind(mint)
             .execute(&mut *transaction)
             .await?;
-        sqlx::query("DELETE FROM market_trade_cursors WHERE mint = ?")
-            .bind(mint)
-            .execute(&mut *transaction)
-            .await?;
+        // Keep the per-mint cursor even when cached trade/candle rows expire.
+        // A returning client can then continue after the last durable sequence.
         transaction.commit().await?;
         Ok(())
     }
@@ -663,6 +661,30 @@ mod tests {
         assert_eq!(trades.len(), 2);
         assert!(trades.iter().any(|trade| trade.event_index == 12));
         assert!(trades.iter().any(|trade| trade.event_index == 28));
+
+        store.delete_mint("mint-a").await.unwrap();
+        let third = Trade {
+            signature: "after-cache-expiry".to_owned(),
+            event_index: 0,
+            side: "buy".to_owned(),
+            trader: None,
+            amount_sol: None,
+            token_amount: Some(1.0),
+            price_usd: Some(3.0),
+            volume_usd: Some(3.0),
+            timestamp_ms: 122_000,
+        };
+        assert!(store
+            .record_confirmed_trade("mint-a", &third)
+            .await
+            .unwrap());
+        assert_eq!(
+            store
+                .load_trade_cursor("mint-a", &third.signature, third.event_index)
+                .await
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
