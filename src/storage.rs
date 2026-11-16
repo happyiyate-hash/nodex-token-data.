@@ -288,8 +288,8 @@ impl MarketStore {
             "SELECT
                 SUM(CASE WHEN lower(side) = 'buy' THEN volume_usd END),
                 SUM(CASE WHEN lower(side) = 'sell' THEN volume_usd END),
-                SUM(CASE WHEN lower(side) = 'buy' THEN 1 ELSE 0 END),
-                SUM(CASE WHEN lower(side) = 'sell' THEN 1 ELSE 0 END)
+                COALESCE(SUM(CASE WHEN lower(side) = 'buy' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN lower(side) = 'sell' THEN 1 ELSE 0 END), 0)
              FROM market_trades WHERE mint = ? AND timestamp_ms >= ?",
         )
         .bind(mint)
