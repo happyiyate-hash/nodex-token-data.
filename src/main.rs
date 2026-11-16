@@ -56,6 +56,10 @@ async fn main() -> Result<()> {
             "/api/v1/tokens/{mint}/snapshot",
             get(api::snapshot::get_snapshot),
         )
+        .route(
+            "/api/v1/tokens/{mint}/trades/missed",
+            get(api::trades::get_missed_trades),
+        )
         .route("/ws/tokens", get(ws::connect))
         .with_state(state)
         .layer(
