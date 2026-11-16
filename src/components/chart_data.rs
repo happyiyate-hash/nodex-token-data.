@@ -9,11 +9,13 @@ pub async fn fetch(
     store: &MarketStore,
 ) -> Result<Vec<ChartPoint>> {
     if let Some(pool) = pair_address {
-        if let Ok(history) = market.fetch_chart(pool, timeframe).await {
-            if !history.is_empty() {
-                store
-                    .seed_historical_candles(mint, timeframe, &history)
-                    .await?;
+        match market.fetch_chart(pool, timeframe).await {
+            Ok(history) if !history.is_empty() => {
+                store.seed_historical_candles(mint, timeframe, &history).await?;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(mint, timeframe, error = %error, "Historical chart provider unavailable; using locally recorded candles");
             }
         }
     }
