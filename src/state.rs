@@ -243,6 +243,37 @@ impl AppState {
             timestamp_ms,
             data,
         });
+        // A confirmed swap is the lowest-latency trustworthy price observation.
+        // Publish it immediately with rolling confirmed buy/sell totals rather than
+        // waiting for the slower public quote refresh worker.
+        if let Ok((buy_volume, sell_volume, buy_count, sell_count)) = self.market_store.load_trade_totals_24h(mint).await {
+            let buy_pressure_pct = match (buy_volume, sell_volume) {
+                (Some(buy), Some(sell)) if buy + sell > 0.0 => Some(buy / (buy + sell) * 100.0),
+                (Some(buy), None) if buy > 0.0 => Some(100.0),
+                (None, Some(sell)) if sell > 0.0 => Some(0.0),
+                _ => None,
+            };
+            let mut market = serde_json::json!({
+                "buy_volume_usd": buy_volume,
+                "sell_volume_usd": sell_volume,
+                "buy_pressure_pct": buy_pressure_pct,
+                "confirmed_buy_count_24h": buy_count,
+                "confirmed_sell_count_24h": sell_count,
+                "transactions_24h": buy_count + sell_count,
+            });
+            if let Some(price) = trade.price_usd.filter(|price| price.is_finite() && *price > 0.0) {
+                market["price_usd"] = serde_json::json!(price);
+            }
+            let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+            self.publish(StreamEvent {
+                event: "market_update".into(),
+                mint: mint.into(),
+                topic: "token.market".into(),
+                sequence,
+                timestamp_ms,
+                data: market,
+            });
+        }
         for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
             if let Ok(points) = self.market_store.load_candles(mint, timeframe, 1).await {
                 if let Some(candle) = points.last() {
