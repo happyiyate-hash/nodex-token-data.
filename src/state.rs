@@ -20,7 +20,7 @@ use crate::{
     stream::StreamEvent,
 };
 
-const MAX_ACTIVE_MARKET_MINTS: usize = 10;
+const MAX_ACTIVE_MARKET_MINTS: usize = 100;
 const MONITOR_GRACE: Duration = Duration::from_secs(300);
 const CACHE_TTL: Duration = Duration::from_secs(600);
 
