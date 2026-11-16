@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(state.subscribed_mints().await, vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a").await;
-        assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
+        assert_eq!(state.subscribed_mints().await, vec!["mint-a".to_owned()]);
     }
 
     #[tokio::test]
@@ -453,6 +453,6 @@ mod tests {
             assert!(state.track_mint(&format!("mint-{index}")).await);
         }
         assert!(!state.track_mint("mint-over-limit").await);
-        assert_eq!(state.subscribed_mints().len(), MAX_ACTIVE_MARKET_MINTS);
+        assert_eq!(state.subscribed_mints().await.len(), MAX_ACTIVE_MARKET_MINTS);
     }
 }
