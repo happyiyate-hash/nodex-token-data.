@@ -4,7 +4,6 @@ use std::{env, net::SocketAddr};
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub bind_addr: SocketAddr,
-    pub api_key: String,
     pub database_url: String,
     pub providers: Vec<ProviderConfig>,
 }
@@ -20,12 +19,6 @@ impl AppConfig {
             .unwrap_or_else(|_| "0.0.0.0:8081".into())
             .parse()
             .context("Invalid NODEX_BIND_ADDR")?;
-        let api_key = env::var("NODEX_API_KEY").context("NODEX_API_KEY is required")?;
-        if api_key.trim().len() < 32 {
-            return Err(anyhow!(
-                "NODEX_API_KEY must contain at least 32 non-whitespace characters"
-            ));
-        }
         let mut providers = Vec::new();
         let helius = parse_csv("HELIUS_API_KEYS");
         if !helius.is_empty() {
@@ -47,7 +40,6 @@ impl AppConfig {
             .unwrap_or_else(|_| "sqlite://./data/nodex-token-data.db".into());
         Ok(Self {
             bind_addr,
-            api_key,
             database_url,
             providers,
         })
