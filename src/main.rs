@@ -2,6 +2,7 @@ mod api;
 mod components;
 mod config;
 mod market;
+mod market_engine;
 mod models;
 mod providers;
 mod state;
