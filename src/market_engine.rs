@@ -51,7 +51,10 @@ impl MarketEngine {
     /// Update every supported timeframe in memory from one confirmed swap.
     /// Returns the changed candle for each timeframe for immediate WS broadcast.
     pub fn apply_trade(&mut self, mint: &str, trade: &Trade) -> Vec<(String, ChartPoint)> {
-        let Some(price) = trade.price_usd.filter(|value| value.is_finite() && *value > 0.0) else {
+        let Some(price) = trade
+            .price_usd
+            .filter(|value| value.is_finite() && *value > 0.0)
+        else {
             return Vec::new();
         };
         let volume = trade
@@ -64,8 +67,10 @@ impl MarketEngine {
         for (timeframe, interval_ms) in TIMEFRAMES {
             let bucket = trade.timestamp_ms.div_euclid(interval_ms) * interval_ms;
             let key = (timeframe.to_owned(), bucket);
-            let candle = state.candles.entry(key.clone()).or_insert_with(|| {
-                CandleState {
+            let candle = state
+                .candles
+                .entry(key.clone())
+                .or_insert_with(|| CandleState {
                     open_timestamp_ms: trade.timestamp_ms,
                     close_timestamp_ms: trade.timestamp_ms,
                     point: ChartPoint {
@@ -76,8 +81,7 @@ impl MarketEngine {
                         close: price,
                         volume: 0.0,
                     },
-                }
-            });
+                });
 
             if trade.timestamp_ms < candle.open_timestamp_ms {
                 candle.point.open = price;
