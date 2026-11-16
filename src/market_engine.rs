@@ -23,6 +23,7 @@ struct CandleState {
 
 #[derive(Default)]
 struct TokenCandles {
+    last_price: Option<f64>,
     candles: BTreeMap<(String, i64), CandleState>,
 }
 
@@ -39,6 +40,9 @@ impl MarketEngine {
         };
         let key_time = point.timestamp_ms.div_euclid(*interval_ms) * *interval_ms;
         let state = self.tokens.entry(mint.to_owned()).or_default();
+        if timeframe == "1M" {
+            state.last_price = Some(point.close);
+        }
         state
             .candles
             .entry((timeframe.to_owned(), key_time))
@@ -63,6 +67,7 @@ impl MarketEngine {
             .filter(|value| value.is_finite() && *value >= 0.0)
             .unwrap_or(0.0);
         let state = self.tokens.entry(mint.to_owned()).or_default();
+        state.last_price = Some(price);
         let mut changed = Vec::with_capacity(TIMEFRAMES.len());
 
         for (timeframe, interval_ms) in TIMEFRAMES {
@@ -107,6 +112,10 @@ impl MarketEngine {
             }
         }
         changed
+    }
+
+    pub fn latest_price(&self, mint: &str) -> Option<f64> {
+        self.tokens.get(mint).and_then(|state| state.last_price)
     }
 
     pub fn remove_token(&mut self, mint: &str) {
