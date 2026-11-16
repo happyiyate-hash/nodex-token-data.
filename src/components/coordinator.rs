@@ -77,7 +77,12 @@ pub async fn load_snapshot(
         .market_store
         .load_trade_totals_24h(mint)
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Confirmed trade totals could not be loaded".to_owned()))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Confirmed trade totals could not be loaded".to_owned(),
+            )
+        })?;
     snapshot.market.buy_volume_usd = buy_volume;
     snapshot.market.sell_volume_usd = sell_volume;
     snapshot.market.buy_pressure_pct = match (buy_volume, sell_volume) {
