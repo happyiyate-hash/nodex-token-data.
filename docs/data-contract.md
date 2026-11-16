@@ -42,3 +42,15 @@ Position and portfolio state are owned by the existing NodeX trading engine, not
 - Market cap uses the provider's reported market-cap field; fully diluted valuation is not substituted when market cap is absent.
 - Chart history comes from the historical pool-data source, not generated demo points. Imported history is stored in SQLite; locally observed confirmed swaps will update the same candle store once the DEX decoder is connected.
 - Token amount and USD volume in the trade snapshot are kept distinct; the quote-asset amount is not assumed to be SOL.
+
+
+## Confirmed-trade gap recovery
+
+The read-only endpoint `GET /api/v1/tokens/{mint}/trades/missed?after={cursor}&limit=500`
+returns confirmed on-chain trades after a per-mint, monotonically increasing SQLite cursor.
+Each `token.trades` WebSocket event includes the same `data.cursor`. Clients should
+subscribe first, backfill from their last cursor, and pass recovered trades through
+the same signature/event-index deduplication path as live trades. Responses include
+`head_cursor`, `next_cursor`, and `has_more` for pagination. If the token's retained
+cache has been evicted and recreated, `cursor_reset` signals the client to restart
+from the retained trades and refresh its REST candle baseline.
