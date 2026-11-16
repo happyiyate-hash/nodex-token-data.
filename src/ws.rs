@@ -111,6 +111,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 })).await.is_err() {
                                     break;
                                 }
+                                if selected_topics.contains("token.chart") {
+                                    if let Err(error) = state.publish_local_chart_snapshots(&mint).await {
+                                        if send_json(&mut sender, json!({
+                                            "event": "error",
+                                            "code": "chart_replay_failed",
+                                            "message": error.to_string()
+                                        })).await.is_err() { break; }
+                                    }
+                                }
                             }
                             "unsubscribe" => {
                                 selected_topics.clear();
