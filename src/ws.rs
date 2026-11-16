@@ -8,7 +8,6 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{Sink, SinkExt, StreamExt};
-use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
