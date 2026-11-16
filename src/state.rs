@@ -320,6 +320,8 @@ impl AppState {
                 "confirmed_transactions_24h": buy_count + sell_count,
                 "volume_24h_usd": match (buy_volume, sell_volume) {
                     (Some(buy), Some(sell)) => Some(buy + sell),
+                    (Some(buy), None) if sell_count == 0 => Some(buy),
+                    (None, Some(sell)) if buy_count == 0 => Some(sell),
                     _ => None,
                 },
             });
