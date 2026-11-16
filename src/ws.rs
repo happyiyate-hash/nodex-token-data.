@@ -16,10 +16,7 @@ use crate::{
     stream::{ClientCommand, TOPICS},
 };
 
-pub async fn connect(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn connect(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -98,7 +95,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                         if send_json(&mut sender, json!({
                                             "event": "error",
                                             "code": "active_token_limit",
-                                            "limit": 500
+                                            "limit": 10
                                         })).await.is_err() {
                                             break;
                                         }
