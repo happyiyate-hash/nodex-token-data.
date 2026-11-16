@@ -155,6 +155,7 @@ mod tests {
         assert_eq!(one_second.1.low, 2.0);
         assert_eq!(one_second.1.close, 3.0);
         assert_eq!(one_second.1.volume, 12.0);
+        assert_eq!(engine.latest_price("mint-a"), Some(3.0));
     }
 
     #[test]
