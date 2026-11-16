@@ -382,34 +382,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Replays every locally stored timeframe immediately after a client subscribes.
-    /// This is database-only: switching timeframes never triggers another history-provider request.
-    pub async fn publish_local_chart_snapshots(&self, mint: &str) -> Result<()> {
-        for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
-            let points = self
-                .market_store
-                .load_candles(mint, timeframe, 5000)
-                .await?;
-            if points.is_empty() {
-                continue;
-            }
-            let timestamp_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-            self.publish(StreamEvent {
-                event: "chart_snapshot".into(),
-                mint: mint.into(),
-                topic: "token.chart".into(),
-                sequence,
-                timestamp_ms,
-                data: serde_json::json!({"timeframe": timeframe, "points": points}),
-            });
-        }
-        Ok(())
-    }
-
     pub async fn publish_chart_snapshot(&self, mint: &str, timeframe: &str) -> Result<()> {
         // Timeframe changes are served from the local durable candle store.
         // They must not trigger another third-party history-provider request.
