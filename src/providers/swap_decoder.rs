@@ -15,6 +15,8 @@ struct Swap {
     quote: u64,
     quote_mint: Option<String>,
     sol: Option<f64>,
+    virtual_sol_reserves: Option<u64>,
+    virtual_token_reserves: Option<u64>,
     time: i64,
     event_index: u32,
 }
@@ -55,31 +57,32 @@ async fn decode_single_trade(
         return None;
     }
     let mut amount_sol = event.sol;
+    let mut sol_price_usd = None;
+    let quote_mint = event
+        .quote_mint
+        .as_deref()
+        .or_else(|| quote_mint_from_tx(tx, mint));
     let quote_usd = if let Some(sol) = event.sol.filter(|v| *v > 0.0) {
-        market
+        sol_price_usd = market
             .fetch_quote(WSOL)
             .await
             .ok()
             .flatten()
-            .and_then(|q| q.price_usd)
-            .map(|p| sol * p)
+            .and_then(|q| q.price_usd);
+        sol_price_usd.map(|price| sol * price)
     } else {
-        let quote_mint = event
-            .quote_mint
-            .as_deref()
-            .or_else(|| quote_mint_from_tx(tx, mint));
         match quote_mint {
             Some(WSOL) => {
                 let quote_decimals = token_decimals(tx, WSOL).unwrap_or(9);
                 let sol = event.quote as f64 / 10_f64.powi(quote_decimals as i32);
                 amount_sol = Some(sol);
-                market
+                sol_price_usd = market
                     .fetch_quote(WSOL)
                     .await
                     .ok()
                     .flatten()
-                    .and_then(|q| q.price_usd)
-                    .map(|p| sol * p)
+                    .and_then(|q| q.price_usd);
+                sol_price_usd.map(|price| sol * price)
             }
             Some(USDC) | Some(USDT) => {
                 let quote_decimals = token_decimals(tx, quote_mint.unwrap()).unwrap_or(6);
@@ -87,6 +90,27 @@ async fn decode_single_trade(
             }
             _ => None,
         }
+    };
+    // Pump TradeEvent carries the post-swap virtual reserves. Prefer that
+    // on-chain spot price over the executed trade's average fill price.
+    // Only apply the SOL reserve formula when the quote asset is WSOL.
+    let reserve_price_usd = if quote_mint == Some(WSOL) {
+        match (event.virtual_sol_reserves, event.virtual_token_reserves) {
+            (Some(virtual_sol), Some(virtual_tokens))
+                if virtual_sol > 0 && virtual_tokens > 0 && sol_price_usd.is_some() =>
+            {
+                let sol_reserves = virtual_sol as f64 / 1_000_000_000.0;
+                let token_reserves = virtual_tokens as f64 / 10_f64.powi(decimals as i32);
+                let price_sol = sol_reserves / token_reserves;
+                sol_price_usd.and_then(|sol_usd| {
+                    let price = price_sol * sol_usd;
+                    (price.is_finite() && price > 0.0).then_some(price)
+                })
+            }
+            _ => None,
+        }
+    } else {
+        None
     };
     let timestamp = if event.time > 0 {
         event.time
@@ -101,7 +125,7 @@ async fn decode_single_trade(
         trader: Some(event.trader),
         amount_sol,
         token_amount: Some(token_amount),
-        price_usd: quote_usd.map(|v| v / token_amount),
+        price_usd: reserve_price_usd.or_else(|| quote_usd.map(|v| v / token_amount)),
         volume_usd: quote_usd,
         timestamp_ms: timestamp.saturating_mul(1000),
         event_index: event.event_index,
@@ -183,6 +207,8 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
                 quote: quote_raw,
                 quote_mint: Some(quote_mint),
                 sol,
+                virtual_sol_reserves: read_u64(&bytes, 97),
+                virtual_token_reserves: read_u64(&bytes, 105),
                 time,
                 event_index,
             });
@@ -218,6 +244,8 @@ fn decode_events(logs: &[&str], mint: &str, tx: &Value) -> Vec<Swap> {
                 quote,
                 quote_mint: None,
                 sol: None,
+                virtual_sol_reserves: None,
+                virtual_token_reserves: None,
                 time,
                 event_index,
             });
