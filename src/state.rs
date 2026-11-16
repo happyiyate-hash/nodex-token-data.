@@ -408,13 +408,13 @@ mod tests {
     async fn tracked_mints_use_reference_counts() {
         let state = test_state().await;
         assert!(state.track_mint("mint-a").await);
-        assert!(state.track_mint("mint-a"));
+        assert!(state.track_mint("mint-a").await);
         assert_eq!(state.subscribed_mints().await, vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a").await;
-        assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
+        assert_eq!(state.subscribed_mints().await, vec!["mint-a".to_owned()]);
 
-        state.untrack_mint("mint-a");
+        state.untrack_mint("mint-a").await;
         assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
     }
 
@@ -422,7 +422,28 @@ mod tests {
     async fn untracking_unknown_mint_is_safe() {
         let state = test_state().await;
         state.untrack_mint("unknown").await;
-        assert!(state.subscribed_mints().is_empty());
+        assert!(state.subscribed_mints().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn evicts_oldest_inactive_mint_when_capacity_is_full() {
+        let state = test_state().await;
+        for index in 0..MAX_ACTIVE_MARKET_MINTS {
+            assert!(state.track_mint(&format!("mint-{index}")).await);
+        }
+
+        // This mint is inactive but still within its normal cache grace period.
+        state.untrack_mint("mint-0").await;
+        assert_eq!(state.subscribed_mints().await.len(), MAX_ACTIVE_MARKET_MINTS);
+
+        assert!(state.track_mint("mint-replacement").await);
+        let remaining = state.subscribed_mints().await;
+        assert_eq!(remaining.len(), MAX_ACTIVE_MARKET_MINTS);
+        assert!(!remaining.iter().any(|mint| mint == "mint-0"));
+        assert!(remaining.iter().any(|mint| mint == "mint-replacement"));
+
+        // Existing active mints remain protected.
+        assert!(!state.track_mint("mint-another").await);
     }
 
     #[tokio::test]
