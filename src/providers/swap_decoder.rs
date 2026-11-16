@@ -567,6 +567,34 @@ mod tests {
     }
 
     #[test]
+    fn decodes_virtual_reserves_from_pump_trade_event() {
+        let mut bytes = vec![0_u8; 113];
+        bytes[..8].copy_from_slice(&[189, 219, 127, 211, 78, 230, 97, 238]);
+        bytes[8..40].copy_from_slice(&[1; 32]);
+        bytes[40..48].copy_from_slice(&1_000_000_000_u64.to_le_bytes());
+        bytes[48..56].copy_from_slice(&2_000_000_u64.to_le_bytes());
+        bytes[56] = 1;
+        bytes[57..89].copy_from_slice(&[2; 32]);
+        bytes[89..97].copy_from_slice(&1_700_000_000_i64.to_le_bytes());
+        bytes[97..105].copy_from_slice(&30_000_000_000_u64.to_le_bytes());
+        bytes[105..113].copy_from_slice(&1_000_000_000_000_000_u64.to_le_bytes());
+        let logs = [
+            format!("Program {PUMP} invoke [1]"),
+            format!("Program data: {}", STANDARD.encode(bytes)),
+        ];
+        let refs = logs.iter().map(String::as_str).collect::<Vec<_>>();
+        let mint = bs58::encode([1; 32]).into_string();
+        let tx = serde_json::json!({"meta": {
+            "preTokenBalances": [{"mint": mint, "owner": bs58::encode([2; 32]).into_string(), "uiTokenAmount": {"amount": "0", "decimals": 6}}],
+            "postTokenBalances": [{"mint": mint, "owner": bs58::encode([2; 32]).into_string(), "uiTokenAmount": {"amount": "2000000", "decimals": 6}}]
+        }});
+        let events = decode_events(&refs, &mint, &tx);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].virtual_sol_reserves, Some(30_000_000_000));
+        assert_eq!(events[0].virtual_token_reserves, Some(1_000_000_000_000_000));
+    }
+
+    #[test]
     fn decodes_pump_trade_event() {
         let mut b = vec![0_u8; 97];
         b[..8].copy_from_slice(&[189, 219, 127, 211, 78, 230, 97, 238]);
