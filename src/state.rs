@@ -306,7 +306,8 @@ impl AppState {
             (candles, engine.market_cap_usd(mint))
         };
         let timestamp_ms = trade.timestamp_ms.max(0) as u64;
-        let trade_cursor = self.market_store
+        let trade_cursor = self
+            .market_store
             .load_trade_cursor(mint, &trade.signature, trade.event_index)
             .await?;
         let mut data = serde_json::to_value(&trade)?;
