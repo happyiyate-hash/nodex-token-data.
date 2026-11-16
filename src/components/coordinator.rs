@@ -87,8 +87,8 @@ pub async fn load_snapshot(
     snapshot.market.sell_volume_usd = sell_volume;
     snapshot.market.buy_pressure_pct = match (buy_volume, sell_volume) {
         (Some(buy), Some(sell)) if buy + sell > 0.0 => Some(buy / (buy + sell) * 100.0),
-        (Some(buy), None) if buy > 0.0 => Some(100.0),
-        (None, Some(sell)) if sell > 0.0 => Some(0.0),
+        (Some(buy), None) if sell_count == 0 && buy > 0.0 => Some(100.0),
+        (None, Some(sell)) if buy_count == 0 && sell > 0.0 => Some(0.0),
         _ => None,
     };
     if snapshot.market.transactions_24h.is_none() {
