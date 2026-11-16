@@ -20,7 +20,12 @@ use crate::{
     stream::StreamEvent,
 };
 
-const MAX_ACTIVE_MARKET_MINTS: usize = 500;
+const MAX_ACTIVE_MARKET_MINTS: usize = 10;
+const MONITOR_GRACE: Duration = Duration::from_secs(300);
+const CACHE_TTL: Duration = Duration::from_secs(600);
+
+#[derive(Clone, Debug)]
+struct MintLease { watchers: usize, inactive_at: Option<Instant> }
 const STABLE_PROVIDER_CONNECTION: Duration = Duration::from_secs(60);
 
 fn should_reset_provider_backoff(connection_duration: Duration) -> bool {
@@ -33,9 +38,7 @@ pub struct AppState {
     pub provider_client: ProviderClient,
     pub market_client: MarketDataClient,
     pub market_store: MarketStore,
-    pub api_key: Arc<String>,
-    pub tickets: Arc<Mutex<HashMap<String, Instant>>>,
-    active_mints: Arc<Mutex<HashMap<String, usize>>>,
+    active_mints: Arc<Mutex<HashMap<String, MintLease>>>,
     stream_sequence: Arc<AtomicU64>,
     pub stream_tx: broadcast::Sender<StreamEvent>,
 }
@@ -53,41 +56,21 @@ impl AppState {
             provider_client,
             market_client,
             market_store,
-            api_key: Arc::new(config.api_key.clone()),
-            tickets: Arc::new(Mutex::new(HashMap::new())),
             active_mints: Arc::new(Mutex::new(HashMap::new())),
             stream_sequence: Arc::new(AtomicU64::new(0)),
             stream_tx,
         })
     }
 
-    pub fn issue_ws_ticket(&self) -> String {
-        let ticket = uuid::Uuid::new_v4().to_string();
-        if let Ok(mut tickets) = self.tickets.lock() {
-            tickets.retain(|_, expires| *expires > Instant::now());
-            tickets.insert(ticket.clone(), Instant::now() + Duration::from_secs(30));
-        }
-        ticket
-    }
-
-    pub fn consume_ws_ticket(&self, ticket: &str) -> bool {
-        self.tickets
-            .lock()
-            .ok()
-            .and_then(|mut tickets| tickets.remove(ticket))
-            .is_some_and(|expires| expires > Instant::now())
-    }
-
     pub fn track_mint(&self, mint: &str) -> bool {
         if let Ok(mut active) = self.active_mints.lock() {
-            if let Some(count) = active.get_mut(mint) {
-                *count += 1;
+            if let Some(lease) = active.get_mut(mint) {
+                lease.watchers += 1;
+                lease.inactive_at = None;
                 return true;
             }
-            if active.len() >= MAX_ACTIVE_MARKET_MINTS {
-                return false;
-            }
-            active.insert(mint.to_owned(), 1);
+            if active.len() >= MAX_ACTIVE_MARKET_MINTS { return false; }
+            active.insert(mint.to_owned(), MintLease { watchers: 1, inactive_at: None });
             return true;
         }
         false
@@ -95,33 +78,48 @@ impl AppState {
 
     pub fn untrack_mint(&self, mint: &str) {
         if let Ok(mut active) = self.active_mints.lock() {
-            let should_remove = if let Some(count) = active.get_mut(mint) {
-                *count = count.saturating_sub(1);
-                *count == 0
-            } else {
-                false
-            };
-            if should_remove {
-                active.remove(mint);
+            if let Some(lease) = active.get_mut(mint) {
+                lease.watchers = lease.watchers.saturating_sub(1);
+                if lease.watchers == 0 && lease.inactive_at.is_none() {
+                    lease.inactive_at = Some(Instant::now());
+                }
             }
         }
     }
 
+    /// Return watched tokens and recently unwatched tokens still in their
+    /// five-minute monitoring grace period.
     pub fn subscribed_mints(&self) -> Vec<String> {
-        self.active_mints
-            .lock()
-            .map(|active| active.keys().cloned().collect())
-            .unwrap_or_default()
+        let now = Instant::now();
+        self.active_mints.lock().map(|active| active.iter()
+            .filter(|(_, lease)| lease.watchers > 0 || lease.inactive_at.is_some_and(|at| now.duration_since(at) < MONITOR_GRACE))
+            .map(|(mint, _)| mint.clone()).collect()).unwrap_or_default()
+    }
+
+    async fn cleanup_expired_mints(&self) {
+        let expired = if let Ok(mut active) = self.active_mints.lock() {
+            let expired = active.iter()
+                .filter(|(_, lease)| lease.watchers == 0 && lease.inactive_at.is_some_and(|at| Instant::now().duration_since(at) >= CACHE_TTL))
+                .map(|(mint, _)| mint.clone()).collect::<Vec<_>>();
+            for mint in &expired { active.remove(mint); }
+            expired
+        } else { Vec::new() };
+        for mint in expired {
+            if let Err(error) = self.market_store.delete_mint(&mint).await {
+                warn!(mint, error = %error, "Could not remove expired market-data cache");
+            }
+        }
     }
 
     /// Polls the public market-data endpoint in batches and republishes each
     /// verified quote through the app's existing multiplexed WebSocket bus.
-    /// 500 active tokens require at most 17 batched requests per cycle.
+    /// The shared service monitors at most ten distinct token mints globally.
     pub async fn run_market_stream(self) {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
 
         loop {
             interval.tick().await;
+            self.cleanup_expired_mints().await;
             let mints = self.subscribed_mints();
 
             for batch in mints.chunks(30) {
@@ -329,7 +327,6 @@ mod tests {
     async fn test_state() -> AppState {
         let config = AppConfig {
             bind_addr: "127.0.0.1:8081".parse::<SocketAddr>().unwrap(),
-            api_key: "a".repeat(32),
             database_url: "sqlite::memory:".to_owned(),
             providers: Vec::new(),
         };
@@ -371,7 +368,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn caps_unique_active_mints_at_five_hundred() {
+    async fn caps_unique_active_mints_at_ten() {
         let state = test_state().await;
         for index in 0..MAX_ACTIVE_MARKET_MINTS {
             assert!(state.track_mint(&format!("mint-{index}")));
