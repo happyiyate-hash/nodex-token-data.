@@ -11,7 +11,9 @@ pub async fn fetch(
     if let Some(pool) = pair_address {
         match market.fetch_chart(pool, timeframe).await {
             Ok(history) if !history.is_empty() => {
-                store.seed_historical_candles(mint, timeframe, &history).await?;
+                store
+                    .seed_historical_candles(mint, timeframe, &history)
+                    .await?;
             }
             Ok(_) => {}
             Err(error) => {
