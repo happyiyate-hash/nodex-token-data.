@@ -51,7 +51,10 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(api::health::health))
         .route("/providers/status", get(api::providers::status))
-        .route("/api/v1/tokens/{mint}/snapshot", get(api::snapshot::get_snapshot))
+        .route(
+            "/api/v1/tokens/{mint}/snapshot",
+            get(api::snapshot::get_snapshot),
+        )
         .route("/ws/tokens", get(ws::connect))
         .with_state(state)
         .layer(
