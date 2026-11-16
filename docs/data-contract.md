@@ -51,6 +51,7 @@ returns confirmed on-chain trades after a per-mint, monotonically increasing SQL
 Each `token.trades` WebSocket event includes the same `data.cursor`. Clients should
 subscribe first, backfill from their last cursor, and pass recovered trades through
 the same signature/event-index deduplication path as live trades. Responses include
-`head_cursor`, `next_cursor`, and `has_more` for pagination. If the token's retained
-cache has been evicted and recreated, `cursor_reset` signals the client to restart
-from the retained trades and refresh its REST candle baseline.
+`head_cursor`, `next_cursor`, and `has_more` for pagination. The per-token cursor is retained when market cache rows expire, so the sequence
+continues across normal cache eviction. `cursor_reset` is reserved for a database
+reset or a cursor that is ahead of the current head; in that case the client restarts
+from retained trades and refreshes its REST candle baseline.
