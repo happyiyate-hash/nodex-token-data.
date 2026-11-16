@@ -25,7 +25,10 @@ const MONITOR_GRACE: Duration = Duration::from_secs(300);
 const CACHE_TTL: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
-struct MintLease { watchers: usize, inactive_at: Option<Instant> }
+struct MintLease {
+    watchers: usize,
+    inactive_at: Option<Instant>,
+}
 const STABLE_PROVIDER_CONNECTION: Duration = Duration::from_secs(60);
 
 fn should_reset_provider_backoff(connection_duration: Duration) -> bool {
@@ -69,8 +72,16 @@ impl AppState {
                 lease.inactive_at = None;
                 return true;
             }
-            if active.len() >= MAX_ACTIVE_MARKET_MINTS { return false; }
-            active.insert(mint.to_owned(), MintLease { watchers: 1, inactive_at: None });
+            if active.len() >= MAX_ACTIVE_MARKET_MINTS {
+                return false;
+            }
+            active.insert(
+                mint.to_owned(),
+                MintLease {
+                    watchers: 1,
+                    inactive_at: None,
+                },
+            );
             return true;
         }
         false
@@ -91,19 +102,42 @@ impl AppState {
     /// five-minute monitoring grace period.
     pub fn subscribed_mints(&self) -> Vec<String> {
         let now = Instant::now();
-        self.active_mints.lock().map(|active| active.iter()
-            .filter(|(_, lease)| lease.watchers > 0 || lease.inactive_at.is_some_and(|at| now.duration_since(at) < MONITOR_GRACE))
-            .map(|(mint, _)| mint.clone()).collect()).unwrap_or_default()
+        self.active_mints
+            .lock()
+            .map(|active| {
+                active
+                    .iter()
+                    .filter(|(_, lease)| {
+                        lease.watchers > 0
+                            || lease
+                                .inactive_at
+                                .is_some_and(|at| now.duration_since(at) < MONITOR_GRACE)
+                    })
+                    .map(|(mint, _)| mint.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     async fn cleanup_expired_mints(&self) {
         let expired = if let Ok(mut active) = self.active_mints.lock() {
-            let expired = active.iter()
-                .filter(|(_, lease)| lease.watchers == 0 && lease.inactive_at.is_some_and(|at| Instant::now().duration_since(at) >= CACHE_TTL))
-                .map(|(mint, _)| mint.clone()).collect::<Vec<_>>();
-            for mint in &expired { active.remove(mint); }
+            let expired = active
+                .iter()
+                .filter(|(_, lease)| {
+                    lease.watchers == 0
+                        && lease
+                            .inactive_at
+                            .is_some_and(|at| Instant::now().duration_since(at) >= CACHE_TTL)
+                })
+                .map(|(mint, _)| mint.clone())
+                .collect::<Vec<_>>();
+            for mint in &expired {
+                active.remove(mint);
+            }
             expired
-        } else { Vec::new() };
+        } else {
+            Vec::new()
+        };
         for mint in expired {
             if let Err(error) = self.market_store.delete_mint(&mint).await {
                 warn!(mint, error = %error, "Could not remove expired market-data cache");
@@ -357,7 +391,7 @@ mod tests {
         assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a");
-        assert!(state.subscribed_mints().is_empty());
+        assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
     }
 
     #[tokio::test]
