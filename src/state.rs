@@ -211,6 +211,11 @@ impl AppState {
                                 self.market_engine.lock().await.latest_price(&quote.mint)
                             {
                                 data["price_usd"] = serde_json::json!(onchain_price);
+                                if let Some(market_cap) =
+                                    self.market_engine.lock().await.market_cap_usd(&quote.mint)
+                                {
+                                    data["market_cap_usd"] = serde_json::json!(market_cap);
+                                }
                                 data["price_source"] = serde_json::json!("confirmed_onchain");
                             } else {
                                 data["price_source"] = serde_json::json!("external_reference");
@@ -246,9 +251,13 @@ impl AppState {
                 history.push((timeframe, candle));
             }
         }
+        let total_supply = self.provider_client.fetch_token_supply(mint).await.ok();
         let mut engine = self.market_engine.lock().await;
         for (timeframe, candle) in history {
             engine.seed_candle(mint, timeframe, candle);
+        }
+        if let Some(supply) = total_supply {
+            engine.set_total_supply(mint, supply);
         }
         seeded.insert(mint.to_owned());
         Ok(())
@@ -288,7 +297,11 @@ impl AppState {
         {
             return Ok(());
         }
-        let candle_updates = self.market_engine.lock().await.apply_trade(mint, &trade);
+        let (candle_updates, market_cap_usd) = {
+            let mut engine = self.market_engine.lock().await;
+            let candles = engine.apply_trade(mint, &trade);
+            (candles, engine.market_cap_usd(mint))
+        };
         let timestamp_ms = trade.timestamp_ms.max(0) as u64;
         let data = serde_json::to_value(&trade)?;
         let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
@@ -334,6 +347,7 @@ impl AppState {
                     (None, Some(sell)) if buy_count == 0 => Some(sell),
                     _ => None,
                 },
+                "market_cap_usd": market_cap_usd,
             });
             if let Some(price) = trade
                 .price_usd
