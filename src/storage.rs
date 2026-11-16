@@ -449,7 +449,10 @@ mod tests {
             volume_usd: None,
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
         };
-        assert!(store.record_confirmed_trade("mint-a", &trade).await.unwrap());
+        assert!(store
+            .record_confirmed_trade("mint-a", &trade)
+            .await
+            .unwrap());
         let candles = store.load_candles("mint-a", "1S", 10).await.unwrap();
         assert_eq!(candles.len(), 1);
         assert_eq!(candles[0].close, 0.0025);
