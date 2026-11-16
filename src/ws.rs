@@ -120,7 +120,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 // Send the initial token snapshot over this socket in
                                 // independent sections. The chart is deliberately last and
                                 // chunked oldest-to-newest so other UI sections can render first.
-                                if stream_snapshot(&mut sender, &state, &mint, "1M").await.is_err() {
+                                let timeframe = command.timeframe.as_deref().unwrap_or("1M");
+                                if stream_snapshot(&mut sender, &state, &mint, timeframe).await.is_err() {
                                     break;
                                 }
                             }
