@@ -294,23 +294,15 @@ where
     )
     .await?;
 
-    let (quote_result, holders_result, created_result) = tokio::join!(
-        market_data::fetch(mint, &state.market_client),
-        holder_data::fetch(
-            mint,
-            &chain.total_supply,
-            chain.decimals,
-            &state.provider_client
-        ),
-        state.provider_client.fetch_mint_created_at(mint),
-    );
-    let quote = quote_result.ok().flatten();
-    let holders = holders_result.ok();
-    let created_at = created_result.ok().flatten();
+    // Deliver market data as soon as its quote and verified trade totals are ready.
+    // Do not make the fast market panel wait for the slower holder RPC.
+    let quote = market_data::fetch(mint, &state.market_client)
+        .await
+        .ok()
+        .flatten();
     let pair = quote
         .as_ref()
         .and_then(|value| value.pair_address.as_deref());
-
     let (buy_volume, sell_volume, buy_count, sell_count) = state
         .market_store
         .load_trade_totals_24h(mint)
@@ -353,6 +345,18 @@ where
     )
     .await?;
 
+    // Holders and creation metadata arrive independently after market data.
+    let (holders_result, created_result) = tokio::join!(
+        holder_data::fetch(
+            mint,
+            &chain.total_supply,
+            chain.decimals,
+            &state.provider_client
+        ),
+        state.provider_client.fetch_mint_created_at(mint),
+    );
+    let holders = holders_result.ok();
+    let created_at = created_result.ok().flatten();
     if let Some(holders) = holders {
         send_json(
             sender,
