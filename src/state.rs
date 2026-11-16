@@ -246,7 +246,9 @@ impl AppState {
         // A confirmed swap is the lowest-latency trustworthy price observation.
         // Publish it immediately with rolling confirmed buy/sell totals rather than
         // waiting for the slower public quote refresh worker.
-        if let Ok((buy_volume, sell_volume, buy_count, sell_count)) = self.market_store.load_trade_totals_24h(mint).await {
+        if let Ok((buy_volume, sell_volume, buy_count, sell_count)) =
+            self.market_store.load_trade_totals_24h(mint).await
+        {
             let buy_pressure_pct = match (buy_volume, sell_volume) {
                 (Some(buy), Some(sell)) if buy + sell > 0.0 => Some(buy / (buy + sell) * 100.0),
                 (Some(buy), None) if buy > 0.0 => Some(100.0),
@@ -261,7 +263,10 @@ impl AppState {
                 "confirmed_sell_count_24h": sell_count,
                 "transactions_24h": buy_count + sell_count,
             });
-            if let Some(price) = trade.price_usd.filter(|price| price.is_finite() && *price > 0.0) {
+            if let Some(price) = trade
+                .price_usd
+                .filter(|price| price.is_finite() && *price > 0.0)
+            {
                 market["price_usd"] = serde_json::json!(price);
             }
             let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
@@ -296,7 +301,10 @@ impl AppState {
     /// This is database-only: switching timeframes never triggers another history-provider request.
     pub async fn publish_local_chart_snapshots(&self, mint: &str) -> Result<()> {
         for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
-            let points = self.market_store.load_candles(mint, timeframe, 5000).await?;
+            let points = self
+                .market_store
+                .load_candles(mint, timeframe, 5000)
+                .await?;
             if points.is_empty() {
                 continue;
             }
