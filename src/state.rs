@@ -83,7 +83,9 @@ impl AppState {
                 .iter()
                 .filter(|(_, lease)| lease.watchers == 0)
                 .filter_map(|(candidate, lease)| {
-                    lease.inactive_at.map(|inactive_at| (candidate.clone(), inactive_at))
+                    lease
+                        .inactive_at
+                        .map(|inactive_at| (candidate.clone(), inactive_at))
                 })
                 .min_by_key(|(_, inactive_at)| *inactive_at)
                 .map(|(candidate, _)| candidate);
@@ -172,7 +174,7 @@ impl AppState {
 
     /// Polls the public market-data endpoint in batches and republishes each
     /// verified quote through the app's existing multiplexed WebSocket bus.
-    /// The shared service monitors at most ten distinct token mints globally.
+    /// The shared service monitors at most 100 distinct token mints globally.
     pub async fn run_market_stream(self) {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
 
@@ -435,7 +437,10 @@ mod tests {
 
         // This mint is inactive but still within its normal cache grace period.
         state.untrack_mint("mint-0").await;
-        assert_eq!(state.subscribed_mints().await.len(), MAX_ACTIVE_MARKET_MINTS);
+        assert_eq!(
+            state.subscribed_mints().await.len(),
+            MAX_ACTIVE_MARKET_MINTS
+        );
 
         assert!(state.track_mint("mint-replacement").await);
         let remaining = state.subscribed_mints().await;
@@ -448,7 +453,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn caps_unique_active_mints_at_ten() {
+    async fn caps_unique_active_mints_at_one_hundred() {
         let state = test_state().await;
         for index in 0..MAX_ACTIVE_MARKET_MINTS {
             assert!(state.track_mint(&format!("mint-{index}")).await);
