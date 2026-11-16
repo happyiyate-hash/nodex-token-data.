@@ -105,6 +105,50 @@ impl MarketStore {
                 .await?;
         }
 
+        let refreshed_trade_columns = sqlx::query("PRAGMA table_info(market_trades)")
+            .fetch_all(&pool)
+            .await?;
+        let has_cursor = refreshed_trade_columns
+            .iter()
+            .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("cursor"));
+        if !has_cursor {
+            sqlx::query("ALTER TABLE market_trades ADD COLUMN cursor INTEGER NOT NULL DEFAULT 0")
+                .execute(&pool)
+                .await?;
+            sqlx::query(
+                "WITH ranked AS (
+                    SELECT rowid AS trade_rowid,
+                           ROW_NUMBER() OVER (PARTITION BY mint ORDER BY rowid) AS cursor_value
+                    FROM market_trades
+                 )
+                 UPDATE market_trades
+                 SET cursor = (SELECT cursor_value FROM ranked WHERE trade_rowid = market_trades.rowid)",
+            )
+            .execute(&pool)
+            .await?;
+        }
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS market_trade_cursors (
+                mint TEXT PRIMARY KEY NOT NULL,
+                last_cursor INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO market_trade_cursors (mint, last_cursor)
+             SELECT mint, MAX(cursor) FROM market_trades GROUP BY mint
+             ON CONFLICT(mint) DO UPDATE SET last_cursor = MAX(last_cursor, excluded.last_cursor)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_market_trades_mint_cursor
+             ON market_trades(mint, cursor)",
+        )
+        .execute(&pool)
+        .await?;
+
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_market_trades_mint_time
              ON market_trades(mint, timestamp_ms DESC)",
@@ -171,6 +215,10 @@ impl MarketStore {
             .bind(mint)
             .execute(&mut *transaction)
             .await?;
+        sqlx::query("DELETE FROM market_trade_cursors WHERE mint = ?")
+            .bind(mint)
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -210,10 +258,24 @@ impl MarketStore {
     /// Duplicate signatures are ignored, preventing replay double-counting.
     pub async fn record_confirmed_trade(&self, mint: &str, trade: &Trade) -> Result<bool> {
         let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO market_trade_cursors (mint, last_cursor) VALUES (?, 0)
+             ON CONFLICT(mint) DO NOTHING",
+        )
+        .bind(mint)
+        .execute(&mut *transaction)
+        .await?;
+        let next_cursor: i64 = sqlx::query_scalar(
+            "SELECT last_cursor + 1 FROM market_trade_cursors WHERE mint = ?",
+        )
+        .bind(mint)
+        .fetch_one(&mut *transaction)
+        .await?;
+
         let inserted = sqlx::query(
             "INSERT INTO market_trades
-             (mint, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain')
+             (mint, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms, source, cursor)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'onchain', ?)
              ON CONFLICT(mint, signature, event_index) DO NOTHING",
         )
         .bind(mint)
@@ -226,11 +288,17 @@ impl MarketStore {
         .bind(trade.price_usd)
         .bind(trade.volume_usd)
         .bind(trade.timestamp_ms)
+        .bind(next_cursor)
         .execute(&mut *transaction)
         .await?
         .rows_affected() == 1;
 
         if inserted {
+            sqlx::query("UPDATE market_trade_cursors SET last_cursor = ? WHERE mint = ?")
+                .bind(next_cursor)
+                .bind(mint)
+                .execute(&mut *transaction)
+                .await?;
             // Price is enough to form a real OHLC candle. USD volume is optional;
             // when unavailable keep the candle and mark its volume as zero rather
             // than dropping the entire price observation.
@@ -297,6 +365,58 @@ impl MarketStore {
         .fetch_one(&self.pool)
         .await?;
         Ok((row.0, row.1, row.2.max(0) as u64, row.3.max(0) as u64))
+    }
+
+    pub async fn load_trade_cursor(&self, mint: &str, signature: &str, event_index: u32) -> Result<i64> {
+        let cursor = sqlx::query_scalar::<_, i64>(
+            "SELECT cursor FROM market_trades WHERE mint = ? AND signature = ? AND event_index = ?",
+        )
+        .bind(mint)
+        .bind(signature)
+        .bind(i64::from(event_index))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(cursor)
+    }
+
+    pub async fn trade_cursor_head(&self, mint: &str) -> Result<i64> {
+        let cursor = sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE((SELECT last_cursor FROM market_trade_cursors WHERE mint = ?), 0)",
+        )
+        .bind(mint)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(cursor)
+    }
+
+    pub async fn load_trades_after_cursor(
+        &self,
+        mint: &str,
+        after_cursor: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, Trade)>> {
+        let rows = sqlx::query_as::<_, (i64, String, i64, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64)>(
+            "SELECT cursor, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms
+             FROM market_trades WHERE mint = ? AND cursor > ? ORDER BY cursor ASC LIMIT ?"
+        )
+        .bind(mint)
+        .bind(after_cursor.max(0))
+        .bind(limit.clamp(1, 500))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(cursor, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms)| {
+            (cursor, Trade {
+                signature,
+                event_index: u32::try_from(event_index).unwrap_or_default(),
+                side,
+                trader,
+                token_amount,
+                amount_sol,
+                price_usd,
+                volume_usd,
+                timestamp_ms,
+            })
+        }).collect())
     }
 
     pub async fn load_recent_trades(&self, mint: &str, limit: i64) -> Result<Vec<Trade>> {
