@@ -45,7 +45,7 @@ impl MarketEngine {
         if timeframe == "1M"
             && state
                 .last_price_timestamp_ms
-                .map_or(true, |last| point.timestamp_ms >= last)
+                .is_none_or(|last| point.timestamp_ms >= last)
         {
             state.last_price = Some(point.close);
             state.last_price_timestamp_ms = Some(point.timestamp_ms);
@@ -79,7 +79,7 @@ impl MarketEngine {
         // token's latest-price reference or market-cap calculation.
         if state
             .last_price_timestamp_ms
-            .map_or(true, |last| trade.timestamp_ms >= last)
+            .is_none_or(|last| trade.timestamp_ms >= last)
         {
             state.last_price = Some(price);
             state.last_price_timestamp_ms = Some(trade.timestamp_ms);
@@ -191,7 +191,7 @@ mod tests {
         let mut engine = MarketEngine::default();
         engine.set_total_supply("mint-a", 1_000_000.0);
         engine.apply_trade("mint-a", &trade("newer", 2_500, 3.0, 2.0));
-        let stale = engine.apply_trade("mint-a", &trade("older", 1_500, 2.0, 1.0));
+        let stale = engine.apply_trade("mint-a", &trade("older", 2_200, 2.0, 1.0));
 
         assert_eq!(engine.latest_price("mint-a"), Some(3.0));
         assert_eq!(engine.market_cap_usd("mint-a"), Some(3_000_000.0));
