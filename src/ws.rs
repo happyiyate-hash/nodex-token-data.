@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        State,
     },
     response::IntoResponse,
 };
@@ -16,24 +16,10 @@ use crate::{
     stream::{ClientCommand, TOPICS},
 };
 
-#[derive(Deserialize)]
-pub struct TicketQuery {
-    ticket: String,
-}
-
 pub async fn connect(
     ws: WebSocketUpgrade,
-    Query(query): Query<TicketQuery>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if !state.consume_ws_ticket(&query.ticket) {
-        return (
-            axum::http::StatusCode::UNAUTHORIZED,
-            "Invalid or expired WebSocket ticket",
-        )
-            .into_response();
-    }
-
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
