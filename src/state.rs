@@ -2,13 +2,13 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
 use crate::{
@@ -65,62 +65,87 @@ impl AppState {
         })
     }
 
-    pub fn track_mint(&self, mint: &str) -> bool {
-        if let Ok(mut active) = self.active_mints.lock() {
-            if let Some(lease) = active.get_mut(mint) {
-                lease.watchers += 1;
-                lease.inactive_at = None;
-                return true;
-            }
-            if active.len() >= MAX_ACTIVE_MARKET_MINTS {
-                return false;
-            }
-            active.insert(
-                mint.to_owned(),
-                MintLease {
-                    watchers: 1,
-                    inactive_at: None,
-                },
-            );
+    /// Reserve a slot for a mint. When full, evict the oldest inactive
+    /// mint (the one nearest its normal ten-minute cache expiry). Active
+    /// watchers are never evicted. The old cache is deleted before the slot
+    /// is reused so a returning client cannot race with cache deletion.
+    pub async fn track_mint(&self, mint: &str) -> bool {
+        let mut active = self.active_mints.lock().await;
+
+        if let Some(lease) = active.get_mut(mint) {
+            lease.watchers += 1;
+            lease.inactive_at = None;
             return true;
         }
-        false
+
+        if active.len() >= MAX_ACTIVE_MARKET_MINTS {
+            let eviction_candidate = active
+                .iter()
+                .filter(|(_, lease)| lease.watchers == 0)
+                .filter_map(|(candidate, lease)| {
+                    lease.inactive_at.map(|inactive_at| (candidate.clone(), inactive_at))
+                })
+                .min_by_key(|(_, inactive_at)| *inactive_at)
+                .map(|(candidate, _)| candidate);
+
+            let Some(evicted_mint) = eviction_candidate else {
+                return false;
+            };
+
+            if let Err(error) = self.market_store.delete_mint(&evicted_mint).await {
+                warn!(
+                    mint = %evicted_mint,
+                    error = %error,
+                    "Could not evict inactive market-data cache; keeping the slot reserved"
+                );
+                return false;
+            }
+
+            active.remove(&evicted_mint);
+            info!(mint = %evicted_mint, replacement = %mint, "Evicted oldest inactive market-data token to free a slot");
+        }
+
+        active.insert(
+            mint.to_owned(),
+            MintLease {
+                watchers: 1,
+                inactive_at: None,
+            },
+        );
+        true
     }
 
-    pub fn untrack_mint(&self, mint: &str) {
-        if let Ok(mut active) = self.active_mints.lock() {
-            if let Some(lease) = active.get_mut(mint) {
-                lease.watchers = lease.watchers.saturating_sub(1);
-                if lease.watchers == 0 && lease.inactive_at.is_none() {
-                    lease.inactive_at = Some(Instant::now());
-                }
+    pub async fn untrack_mint(&self, mint: &str) {
+        let mut active = self.active_mints.lock().await;
+        if let Some(lease) = active.get_mut(mint) {
+            lease.watchers = lease.watchers.saturating_sub(1);
+            if lease.watchers == 0 && lease.inactive_at.is_none() {
+                lease.inactive_at = Some(Instant::now());
             }
         }
     }
 
     /// Return watched tokens and recently unwatched tokens still in their
     /// five-minute monitoring grace period.
-    pub fn subscribed_mints(&self) -> Vec<String> {
+    pub async fn subscribed_mints(&self) -> Vec<String> {
         let now = Instant::now();
         self.active_mints
             .lock()
-            .map(|active| {
-                active
-                    .iter()
-                    .filter(|(_, lease)| {
-                        lease.watchers > 0
-                            || lease
-                                .inactive_at
-                                .is_some_and(|at| now.duration_since(at) < MONITOR_GRACE)
-                    })
-                    .map(|(mint, _)| mint.clone())
-                    .collect()
+            .await
+            .iter()
+            .filter(|(_, lease)| {
+                lease.watchers > 0
+                    || lease
+                        .inactive_at
+                        .is_some_and(|at| now.duration_since(at) < MONITOR_GRACE)
             })
-            .unwrap_or_default()
+            .map(|(mint, _)| mint.clone())
+            .collect()
     }
 
     async fn cleanup_expired_mints(&self) {
-        let expired = if let Ok(mut active) = self.active_mints.lock() {
+        let expired = {
+            let mut active = self.active_mints.lock().await;
             let expired = active
                 .iter()
                 .filter(|(_, lease)| {
@@ -135,9 +160,8 @@ impl AppState {
                 active.remove(mint);
             }
             expired
-        } else {
-            Vec::new()
         };
+
         for mint in expired {
             if let Err(error) = self.market_store.delete_mint(&mint).await {
                 warn!(mint, error = %error, "Could not remove expired market-data cache");
@@ -154,7 +178,7 @@ impl AppState {
         loop {
             interval.tick().await;
             self.cleanup_expired_mints().await;
-            let mints = self.subscribed_mints();
+            let mints = self.subscribed_mints().await;
 
             for batch in mints.chunks(30) {
                 match self.market_client.fetch_quotes(batch).await {
@@ -270,7 +294,7 @@ impl AppState {
         let mut refresh = tokio::time::interval(Duration::from_secs(300));
         loop {
             refresh.tick().await;
-            for mint in self.subscribed_mints() {
+            for mint in self.subscribed_mints().await {
                 match self.provider_client.fetch_holders_for_mint(&mint).await {
                     Ok(holders) => {
                         let timestamp_ms = SystemTime::now()
@@ -383,11 +407,11 @@ mod tests {
     #[tokio::test]
     async fn tracked_mints_use_reference_counts() {
         let state = test_state().await;
+        assert!(state.track_mint("mint-a").await);
         assert!(state.track_mint("mint-a"));
-        assert!(state.track_mint("mint-a"));
-        assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
+        assert_eq!(state.subscribed_mints().await, vec!["mint-a".to_owned()]);
 
-        state.untrack_mint("mint-a");
+        state.untrack_mint("mint-a").await;
         assert_eq!(state.subscribed_mints(), vec!["mint-a".to_owned()]);
 
         state.untrack_mint("mint-a");
@@ -397,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn untracking_unknown_mint_is_safe() {
         let state = test_state().await;
-        state.untrack_mint("unknown");
+        state.untrack_mint("unknown").await;
         assert!(state.subscribed_mints().is_empty());
     }
 
@@ -405,9 +429,9 @@ mod tests {
     async fn caps_unique_active_mints_at_ten() {
         let state = test_state().await;
         for index in 0..MAX_ACTIVE_MARKET_MINTS {
-            assert!(state.track_mint(&format!("mint-{index}")));
+            assert!(state.track_mint(&format!("mint-{index}")).await);
         }
-        assert!(!state.track_mint("mint-over-limit"));
+        assert!(!state.track_mint("mint-over-limit").await);
         assert_eq!(state.subscribed_mints().len(), MAX_ACTIVE_MARKET_MINTS);
     }
 }
