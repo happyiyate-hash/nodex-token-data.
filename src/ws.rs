@@ -88,9 +88,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                                 if selected_mint.as_deref() != Some(mint.as_str()) {
                                     if let Some(previous_mint) = selected_mint.take() {
-                                        state.untrack_mint(&previous_mint);
+                                        state.untrack_mint(&previous_mint).await;
                                     }
-                                    if !state.track_mint(&mint) {
+                                    if !state.track_mint(&mint).await {
                                         if send_json(&mut sender, json!({
                                             "event": "error",
                                             "code": "active_token_limit",
@@ -115,7 +115,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             "unsubscribe" => {
                                 selected_topics.clear();
                                 if let Some(previous_mint) = selected_mint.take() {
-                                    state.untrack_mint(&previous_mint);
+                                    state.untrack_mint(&previous_mint).await;
                                 }
                                 if send_json(&mut sender, json!({
                                     "event": "unsubscribed"
@@ -202,7 +202,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     if let Some(mint) = selected_mint {
-        state.untrack_mint(&mint);
+        state.untrack_mint(&mint).await;
     }
 }
 
