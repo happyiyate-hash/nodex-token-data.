@@ -591,7 +591,10 @@ mod tests {
         let events = decode_events(&refs, &mint, &tx);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].virtual_sol_reserves, Some(30_000_000_000));
-        assert_eq!(events[0].virtual_token_reserves, Some(1_000_000_000_000_000));
+        assert_eq!(
+            events[0].virtual_token_reserves,
+            Some(1_000_000_000_000_000)
+        );
     }
 
     #[test]
