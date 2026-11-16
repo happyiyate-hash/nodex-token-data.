@@ -220,7 +220,11 @@ impl AppState {
         if trade.volume_usd.is_none() {
             if let (Some(token_amount), Some(price_usd)) = (trade.token_amount, trade.price_usd) {
                 let derived_volume = token_amount * price_usd;
-                if token_amount.is_finite() && token_amount > 0.0 && derived_volume.is_finite() && derived_volume > 0.0 {
+                if token_amount.is_finite()
+                    && token_amount > 0.0
+                    && derived_volume.is_finite()
+                    && derived_volume > 0.0
+                {
                     trade.volume_usd = Some(derived_volume);
                 }
             }
@@ -260,8 +264,8 @@ impl AppState {
         {
             let buy_pressure_pct = match (buy_volume, sell_volume) {
                 (Some(buy), Some(sell)) if buy + sell > 0.0 => Some(buy / (buy + sell) * 100.0),
-                (Some(buy), None) if buy > 0.0 => Some(100.0),
-                (None, Some(sell)) if sell > 0.0 => Some(0.0),
+                (Some(buy), None) if sell_count == 0 && buy > 0.0 => Some(100.0),
+                (None, Some(sell)) if buy_count == 0 && sell > 0.0 => Some(0.0),
                 _ => None,
             };
             let mut market = serde_json::json!({
@@ -270,7 +274,7 @@ impl AppState {
                 "buy_pressure_pct": buy_pressure_pct,
                 "confirmed_buy_count_24h": buy_count,
                 "confirmed_sell_count_24h": sell_count,
-                "transactions_24h": buy_count + sell_count,
+                "confirmed_transactions_24h": buy_count + sell_count,
             });
             if let Some(price) = trade
                 .price_usd
