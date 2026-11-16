@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::{Method, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -13,6 +13,13 @@ pub async fn require_api_key(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    // Browser clients send an unauthenticated CORS preflight before the
+    // authenticated request. Let the outer CorsLayer answer it; API routes
+    // themselves remain protected by the API key check below.
+    if request.method() == Method::OPTIONS {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
     let supplied = request
         .headers()
         .get("x-api-key")
