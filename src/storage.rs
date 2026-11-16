@@ -137,7 +137,7 @@ impl MarketStore {
         .await?;
         sqlx::query(
             "INSERT INTO market_trade_cursors (mint, last_cursor)
-             SELECT mint, MAX(cursor) FROM market_trades GROUP BY mint
+             SELECT mint, MAX(cursor) FROM market_trades WHERE 1 GROUP BY mint
              ON CONFLICT(mint) DO UPDATE SET last_cursor = MAX(last_cursor, excluded.last_cursor)",
         )
         .execute(&pool)
@@ -265,12 +265,11 @@ impl MarketStore {
         .bind(mint)
         .execute(&mut *transaction)
         .await?;
-        let next_cursor: i64 = sqlx::query_scalar(
-            "SELECT last_cursor + 1 FROM market_trade_cursors WHERE mint = ?",
-        )
-        .bind(mint)
-        .fetch_one(&mut *transaction)
-        .await?;
+        let next_cursor: i64 =
+            sqlx::query_scalar("SELECT last_cursor + 1 FROM market_trade_cursors WHERE mint = ?")
+                .bind(mint)
+                .fetch_one(&mut *transaction)
+                .await?;
 
         let inserted = sqlx::query(
             "INSERT INTO market_trades
@@ -367,7 +366,12 @@ impl MarketStore {
         Ok((row.0, row.1, row.2.max(0) as u64, row.3.max(0) as u64))
     }
 
-    pub async fn load_trade_cursor(&self, mint: &str, signature: &str, event_index: u32) -> Result<i64> {
+    pub async fn load_trade_cursor(
+        &self,
+        mint: &str,
+        signature: &str,
+        event_index: u32,
+    ) -> Result<i64> {
         let cursor = sqlx::query_scalar::<_, i64>(
             "SELECT cursor FROM market_trades WHERE mint = ? AND signature = ? AND event_index = ?",
         )
@@ -404,19 +408,38 @@ impl MarketStore {
         .bind(limit.clamp(1, 500))
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|(cursor, signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms)| {
-            (cursor, Trade {
-                signature,
-                event_index: u32::try_from(event_index).unwrap_or_default(),
-                side,
-                trader,
-                token_amount,
-                amount_sol,
-                price_usd,
-                volume_usd,
-                timestamp_ms,
-            })
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    cursor,
+                    signature,
+                    event_index,
+                    side,
+                    trader,
+                    token_amount,
+                    amount_sol,
+                    price_usd,
+                    volume_usd,
+                    timestamp_ms,
+                )| {
+                    (
+                        cursor,
+                        Trade {
+                            signature,
+                            event_index: u32::try_from(event_index).unwrap_or_default(),
+                            side,
+                            trader,
+                            token_amount,
+                            amount_sol,
+                            price_usd,
+                            volume_usd,
+                            timestamp_ms,
+                        },
+                    )
+                },
+            )
+            .collect())
     }
 
     pub async fn load_recent_trades(&self, mint: &str, limit: i64) -> Result<Vec<Trade>> {
