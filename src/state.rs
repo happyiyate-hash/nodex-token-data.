@@ -217,6 +217,14 @@ impl AppState {
 
     pub async fn publish_confirmed_trade(&self, mint: &str, trade: Trade) -> Result<()> {
         let mut trade = trade;
+        if trade.price_usd.is_none() {
+            if let (Some(token_amount), Some(volume_usd)) = (trade.token_amount, trade.volume_usd) {
+                let derived_price = volume_usd / token_amount;
+                if token_amount.is_finite() && token_amount > 0.0 && derived_price.is_finite() && derived_price > 0.0 {
+                    trade.price_usd = Some(derived_price);
+                }
+            }
+        }
         if trade.volume_usd.is_none() {
             if let (Some(token_amount), Some(price_usd)) = (trade.token_amount, trade.price_usd) {
                 let derived_volume = token_amount * price_usd;
