@@ -459,6 +459,9 @@ mod tests {
             assert!(state.track_mint(&format!("mint-{index}")).await);
         }
         assert!(!state.track_mint("mint-over-limit").await);
-        assert_eq!(state.subscribed_mints().await.len(), MAX_ACTIVE_MARKET_MINTS);
+        assert_eq!(
+            state.subscribed_mints().await.len(),
+            MAX_ACTIVE_MARKET_MINTS
+        );
     }
 }
