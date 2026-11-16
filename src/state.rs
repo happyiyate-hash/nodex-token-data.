@@ -144,27 +144,28 @@ impl AppState {
     }
 
     async fn cleanup_expired_mints(&self) {
-        let expired = {
-            let mut active = self.active_mints.lock().await;
-            let expired = active
-                .iter()
-                .filter(|(_, lease)| {
-                    lease.watchers == 0
-                        && lease
-                            .inactive_at
-                            .is_some_and(|at| Instant::now().duration_since(at) >= CACHE_TTL)
-                })
-                .map(|(mint, _)| mint.clone())
-                .collect::<Vec<_>>();
-            for mint in &expired {
-                active.remove(mint);
-            }
-            expired
-        };
+        // Keep the lease lock while deleting so a reconnect cannot recreate
+        // the same mint between slot removal and cache cleanup.
+        let mut active = self.active_mints.lock().await;
+        let expired = active
+            .iter()
+            .filter(|(_, lease)| {
+                lease.watchers == 0
+                    && lease
+                        .inactive_at
+                        .is_some_and(|at| Instant::now().duration_since(at) >= CACHE_TTL)
+            })
+            .map(|(mint, _)| mint.clone())
+            .collect::<Vec<_>>();
 
         for mint in expired {
-            if let Err(error) = self.market_store.delete_mint(&mint).await {
-                warn!(mint, error = %error, "Could not remove expired market-data cache");
+            match self.market_store.delete_mint(&mint).await {
+                Ok(()) => {
+                    active.remove(&mint);
+                }
+                Err(error) => {
+                    warn!(mint, error = %error, "Could not remove expired market-data cache");
+                }
             }
         }
     }
