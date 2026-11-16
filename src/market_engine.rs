@@ -39,13 +39,14 @@ impl MarketEngine {
         };
         let key_time = point.timestamp_ms.div_euclid(*interval_ms) * *interval_ms;
         let state = self.tokens.entry(mint.to_owned()).or_default();
-        state.candles.entry((timeframe.to_owned(), key_time)).or_insert(
-            CandleState {
+        state
+            .candles
+            .entry((timeframe.to_owned(), key_time))
+            .or_insert(CandleState {
                 open_timestamp_ms: key_time,
                 close_timestamp_ms: key_time,
                 point,
-            },
-        );
+            });
     }
 
     /// Update every supported timeframe in memory from one confirmed swap.
