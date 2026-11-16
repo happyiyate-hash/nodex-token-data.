@@ -201,10 +201,20 @@ impl AppState {
                                 .unwrap_or_default()
                                 .as_millis() as u64;
                             let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-                            let data = match serde_json::to_value(&quote) {
+                            let mut data = match serde_json::to_value(&quote) {
                                 Ok(value) => value,
                                 Err(_) => continue,
                             };
+                            // External quotes refresh slower reference fields, but must
+                            // never overwrite a more recent confirmed on-chain trade price.
+                            if let Some(onchain_price) =
+                                self.market_engine.lock().await.latest_price(&quote.mint)
+                            {
+                                data["price_usd"] = serde_json::json!(onchain_price);
+                                data["price_source"] = serde_json::json!("confirmed_onchain");
+                            } else {
+                                data["price_source"] = serde_json::json!("external_reference");
+                            }
 
                             self.publish(StreamEvent {
                                 event: "market_update".to_owned(),
