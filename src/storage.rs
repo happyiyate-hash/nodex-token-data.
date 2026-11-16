@@ -270,6 +270,26 @@ impl MarketStore {
         Ok(inserted)
     }
 
+    /// Returns confirmed on-chain buy volume, sell volume, and trade counts
+    /// for the trailing 24 hours. NULL volume values remain excluded rather than
+    /// being silently treated as zero.
+    pub async fn load_trade_totals_24h(&self, mint: &str) -> Result<(Option<f64>, Option<f64>, u64, u64)> {
+        let cutoff_ms = chrono::Utc::now().timestamp_millis().saturating_sub(24 * 60 * 60 * 1000);
+        let row = sqlx::query_as::<_, (Option<f64>, Option<f64>, i64, i64)>(
+            "SELECT
+                SUM(CASE WHEN lower(side) = 'buy' THEN volume_usd END),
+                SUM(CASE WHEN lower(side) = 'sell' THEN volume_usd END),
+                SUM(CASE WHEN lower(side) = 'buy' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN lower(side) = 'sell' THEN 1 ELSE 0 END)
+             FROM market_trades WHERE mint = ? AND timestamp_ms >= ?"
+        )
+        .bind(mint)
+        .bind(cutoff_ms)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((row.0, row.1, row.2.max(0) as u64, row.3.max(0) as u64))
+    }
+
     pub async fn load_recent_trades(&self, mint: &str, limit: i64) -> Result<Vec<Trade>> {
         let rows = sqlx::query_as::<_, (String, i64, String, Option<String>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64)>(
             "SELECT signature, event_index, side, trader, token_amount, amount_sol, price_usd, volume_usd, timestamp_ms FROM market_trades WHERE mint = ? ORDER BY timestamp_ms DESC, signature DESC, event_index DESC LIMIT ?"
