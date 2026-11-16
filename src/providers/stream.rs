@@ -60,7 +60,7 @@ pub async fn run_connection(
                     return Err(anyhow!("{provider} subscription acknowledgement timed out"));
                 }
 
-                let desired = state.subscribed_mints().into_iter()
+                let desired = state.subscribed_mints().await.into_iter()
                     .collect::<std::collections::HashSet<_>>();
                 let acknowledged = mint_to_subscription.keys()
                     .cloned()
@@ -124,7 +124,7 @@ pub async fn run_connection(
                         if let Some(id) = payload.get("id").and_then(Value::as_u64) {
                             if let Some((mint, _)) = pending.remove(&id) {
                                 if let Some(subscription) = payload.get("result").and_then(Value::as_u64) {
-                                    if state.subscribed_mints().iter().any(|active| active == &mint) {
+                                    if state.subscribed_mints().await.iter().any(|active| active == &mint) {
                                         subscription_to_mint.insert(subscription, mint.clone());
                                         mint_to_subscription.insert(mint.clone(), subscription);
                                         info!(provider, mint, subscription, "Provider mint subscription acknowledged");
