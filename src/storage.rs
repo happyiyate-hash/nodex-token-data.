@@ -641,6 +641,24 @@ mod tests {
             .await
             .unwrap());
 
+        let first_cursor = store
+            .load_trade_cursor("mint-a", &first.signature, first.event_index)
+            .await
+            .unwrap();
+        let second_cursor = store
+            .load_trade_cursor("mint-a", &second.signature, second.event_index)
+            .await
+            .unwrap();
+        assert_eq!(first_cursor, 1);
+        assert_eq!(second_cursor, 2);
+        let recovered = store
+            .load_trades_after_cursor("mint-a", first_cursor, 10)
+            .await
+            .unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].0, second_cursor);
+        assert_eq!(recovered[0].1.signature, second.signature);
+
         let trades = store.load_recent_trades("mint-a", 10).await.unwrap();
         assert_eq!(trades.len(), 2);
         assert!(trades.iter().any(|trade| trade.event_index == 12));
