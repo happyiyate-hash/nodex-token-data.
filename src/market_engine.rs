@@ -172,6 +172,15 @@ mod tests {
     }
 
     #[test]
+    fn market_cap_uses_verified_token_supply_and_latest_onchain_price() {
+        let mut engine = MarketEngine::default();
+        engine.set_total_supply("mint-a", 1_000_000_000.0);
+        engine.apply_trade("mint-a", &trade("a", 1_001, 0.000042, 10.0));
+        assert_eq!(engine.market_cap_usd("mint-a"), Some(42_000.0));
+        assert_eq!(engine.market_cap_usd("unknown"), None);
+    }
+
+    #[test]
     fn out_of_order_trades_keep_open_and_close_chronological() {
         let mut engine = MarketEngine::default();
         engine.apply_trade("mint-a", &trade("later", 1_800, 3.0, 2.0));
