@@ -231,7 +231,11 @@ impl MarketStore {
         .rows_affected() == 1;
 
         if inserted {
-            if let (Some(price), Some(volume)) = (trade.price_usd, trade.volume_usd) {
+            // Price is enough to form a real OHLC candle. USD volume is optional;
+            // when unavailable keep the candle and mark its volume as zero rather
+            // than dropping the entire price observation.
+            if let Some(price) = trade.price_usd {
+                let volume = trade.volume_usd.unwrap_or(0.0);
                 if price.is_finite() && price > 0.0 && volume.is_finite() && volume >= 0.0 {
                     for (timeframe, interval_ms) in candle_intervals() {
                         let bucket = trade.timestamp_ms.div_euclid(interval_ms) * interval_ms;
@@ -429,6 +433,27 @@ mod tests {
         assert_eq!(candles[0].low, 1.5);
         assert_eq!(candles[0].close, 1.5);
         assert_eq!(candles[0].volume, 27.5);
+    }
+
+    #[tokio::test]
+    async fn creates_price_candles_when_usd_volume_is_unavailable() {
+        let store = MarketStore::connect("sqlite::memory:").await.unwrap();
+        let trade = Trade {
+            signature: "price-without-volume".to_owned(),
+            event_index: 0,
+            side: "buy".to_owned(),
+            trader: None,
+            amount_sol: None,
+            token_amount: Some(25.0),
+            price_usd: Some(0.0025),
+            volume_usd: None,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        assert!(store.record_confirmed_trade("mint-a", &trade).await.unwrap());
+        let candles = store.load_candles("mint-a", "1S", 10).await.unwrap();
+        assert_eq!(candles.len(), 1);
+        assert_eq!(candles[0].close, 0.0025);
+        assert_eq!(candles[0].volume, 0.0);
     }
 
     #[tokio::test]
