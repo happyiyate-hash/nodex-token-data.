@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use crate::{
     config::AppConfig,
     market::MarketDataClient,
+    market_engine::MarketEngine,
     models::Trade,
     providers::{ProviderClient, ProviderManager},
     storage::MarketStore,
@@ -42,6 +43,8 @@ pub struct AppState {
     pub market_client: MarketDataClient,
     pub market_store: MarketStore,
     active_mints: Arc<Mutex<HashMap<String, MintLease>>>,
+    market_engine: Arc<Mutex<MarketEngine>>,
+    seeded_market_mints: Arc<Mutex<HashSet<String>>>,
     stream_sequence: Arc<AtomicU64>,
     pub stream_tx: broadcast::Sender<StreamEvent>,
 }
@@ -60,6 +63,8 @@ impl AppState {
             market_client,
             market_store,
             active_mints: Arc::new(Mutex::new(HashMap::new())),
+            market_engine: Arc::new(Mutex::new(MarketEngine::default())),
+            seeded_market_mints: Arc::new(Mutex::new(HashSet::new())),
             stream_sequence: Arc::new(AtomicU64::new(0)),
             stream_tx,
         })
@@ -104,6 +109,8 @@ impl AppState {
             }
 
             active.remove(&evicted_mint);
+            self.market_engine.lock().await.remove_token(&evicted_mint);
+            self.seeded_market_mints.lock().await.remove(&evicted_mint);
             info!(mint = %evicted_mint, replacement = %mint, "Evicted oldest inactive market-data token to free a slot");
         }
 
@@ -164,6 +171,8 @@ impl AppState {
             match self.market_store.delete_mint(&mint).await {
                 Ok(()) => {
                     active.remove(&mint);
+                    self.market_engine.lock().await.remove_token(&mint);
+                    self.seeded_market_mints.lock().await.remove(&mint);
                 }
                 Err(error) => {
                     warn!(mint, error = %error, "Could not remove expired market-data cache");
@@ -172,11 +181,11 @@ impl AppState {
         }
     }
 
-    /// Polls the public market-data endpoint in batches and republishes each
-    /// verified quote through the app's existing multiplexed WebSocket bus.
+    /// Refreshes slower external reference metrics as a fallback. Confirmed
+    /// on-chain swaps, not this worker, are the primary source of live price ticks.
     /// The shared service monitors at most 100 distinct token mints globally.
     pub async fn run_market_stream(self) {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
 
         loop {
             interval.tick().await;
@@ -215,6 +224,26 @@ impl AppState {
         }
     }
 
+    async fn seed_market_engine(&self, mint: &str) -> Result<()> {
+        let mut seeded = self.seeded_market_mints.lock().await;
+        if seeded.contains(mint) {
+            return Ok(());
+        }
+        let mut history = Vec::new();
+        for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
+            let candles = self.market_store.load_candles(mint, timeframe, 1).await?;
+            if let Some(candle) = candles.into_iter().next() {
+                history.push((timeframe, candle));
+            }
+        }
+        let mut engine = self.market_engine.lock().await;
+        for (timeframe, candle) in history {
+            engine.seed_candle(mint, timeframe, candle);
+        }
+        seeded.insert(mint.to_owned());
+        Ok(())
+    }
+
     pub async fn publish_confirmed_trade(&self, mint: &str, trade: Trade) -> Result<()> {
         let mut trade = trade;
         if trade.price_usd.is_none() {
@@ -241,6 +270,7 @@ impl AppState {
                 }
             }
         }
+        self.seed_market_engine(mint).await?;
         if !self
             .market_store
             .record_confirmed_trade(mint, &trade)
@@ -248,6 +278,7 @@ impl AppState {
         {
             return Ok(());
         }
+        let candle_updates = self.market_engine.lock().await.apply_trade(mint, &trade);
         let timestamp_ms = trade.timestamp_ms.max(0) as u64;
         let data = serde_json::to_value(&trade)?;
         let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
@@ -304,20 +335,16 @@ impl AppState {
                 data: market,
             });
         }
-        for timeframe in ["1S", "5S", "10S", "1M", "5M", "15M", "30M", "1H", "24H"] {
-            if let Ok(points) = self.market_store.load_candles(mint, timeframe, 1).await {
-                if let Some(candle) = points.last() {
-                    let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-                    self.publish(StreamEvent {
-                        event: "candle_update".into(),
-                        mint: mint.into(),
-                        topic: "token.chart".into(),
-                        sequence,
-                        timestamp_ms,
-                        data: serde_json::json!({"timeframe": timeframe, "candle": candle}),
-                    });
-                }
-            }
+        for (timeframe, candle) in candle_updates {
+            let sequence = self.stream_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+            self.publish(StreamEvent {
+                event: "candle_update".into(),
+                mint: mint.into(),
+                topic: "token.chart".into(),
+                sequence,
+                timestamp_ms,
+                data: serde_json::json!({"timeframe": timeframe, "candle": candle}),
+            });
         }
         Ok(())
     }
@@ -351,18 +378,9 @@ impl AppState {
     }
 
     pub async fn publish_chart_snapshot(&self, mint: &str, timeframe: &str) -> Result<()> {
-        let quote = self.market_client.fetch_quote(mint).await.ok().flatten();
-        let pair = quote
-            .as_ref()
-            .and_then(|value| value.pair_address.as_deref());
-        let points = crate::components::chart_data::fetch(
-            mint,
-            timeframe,
-            pair,
-            &self.market_client,
-            &self.market_store,
-        )
-        .await?;
+        // Timeframe changes are served from the local durable candle store.
+        // They must not trigger another third-party history-provider request.
+        let points = self.market_store.load_candles(mint, timeframe, 5000).await?;
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
