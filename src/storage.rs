@@ -161,6 +161,14 @@ impl MarketStore {
 
     /// Seed historical candles without replacing candles already built from
     /// locally observed swaps. This makes repeated history backfills safe.
+    pub async fn delete_mint(&self, mint: &str) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("DELETE FROM market_trades WHERE mint = ?").bind(mint).execute(&mut *transaction).await?;
+        sqlx::query("DELETE FROM market_candles WHERE mint = ?").bind(mint).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn seed_historical_candles(
         &self,
         mint: &str,
