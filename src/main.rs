@@ -2,7 +2,6 @@ mod api;
 mod components;
 mod config;
 mod market;
-mod middleware;
 mod models;
 mod providers;
 mod state;
@@ -12,16 +11,15 @@ mod ws;
 
 use anyhow::Result;
 use axum::{
-    http::{header, HeaderName, Method},
-    middleware::from_fn_with_state,
-    routing::{get, post},
+    http::{header, Method},
+    routing::get,
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::{config::AppConfig, middleware::require_api_key, state::AppState};
+use crate::{config::AppConfig, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,26 +48,17 @@ async fn main() -> Result<()> {
         provider_stream_state.run_provider_streams().await;
     });
 
-    let protected = Router::new()
-        .route("/providers/status", get(api::providers::status))
-        .route(
-            "/api/v1/tokens/{mint}/snapshot",
-            get(api::snapshot::get_snapshot),
-        )
-        .route("/api/v1/ws-ticket", post(api::ws_ticket::issue))
-        .route_layer(from_fn_with_state(state.clone(), require_api_key));
-
     let app = Router::new()
         .route("/health", get(api::health::health))
-        // The WebSocket uses a short-lived, single-use ticket.
+        .route("/providers/status", get(api::providers::status))
+        .route("/api/v1/tokens/{mint}/snapshot", get(api::snapshot::get_snapshot))
         .route("/ws/tokens", get(ws::connect))
-        .merge(protected)
         .with_state(state)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([header::CONTENT_TYPE, HeaderName::from_static("x-api-key")]),
+                .allow_headers([header::CONTENT_TYPE]),
         );
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
