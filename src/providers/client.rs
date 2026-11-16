@@ -127,6 +127,34 @@ impl ProviderClient {
         })
     }
 
+    /// Fetches the mint's actual on-chain supply without requiring DAS metadata.
+    pub async fn fetch_token_supply(&self, mint: &str) -> Result<f64> {
+        let response = self
+            .request_rpc(
+                "getTokenSupply",
+                json!([mint, { "commitment": "confirmed" }]),
+            )
+            .await?;
+        let value = response
+            .get("value")
+            .ok_or_else(|| anyhow!("RPC token-supply response has no value"))?;
+        let decimals = value
+            .get("decimals")
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .ok_or_else(|| anyhow!("RPC token-supply response has invalid decimals"))?;
+        let raw = value
+            .get("amount")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("RPC token-supply response has no raw amount"))?
+            .parse::<u128>()?;
+        let supply = raw as f64 / 10_f64.powi(decimals as i32);
+        if !supply.is_finite() || supply <= 0.0 {
+            return Err(anyhow!("RPC token-supply response has invalid supply"));
+        }
+        Ok(supply)
+    }
+
     pub async fn fetch_transaction(&self, signature: &str) -> Result<Value> {
         self.request_rpc("getTransaction", json!([signature, {
             "encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0
