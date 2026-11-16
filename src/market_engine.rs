@@ -24,6 +24,7 @@ struct CandleState {
 #[derive(Default)]
 struct TokenCandles {
     last_price: Option<f64>,
+    last_price_timestamp_ms: Option<i64>,
     total_supply: Option<f64>,
     candles: BTreeMap<(String, i64), CandleState>,
 }
@@ -41,8 +42,13 @@ impl MarketEngine {
         };
         let key_time = point.timestamp_ms.div_euclid(*interval_ms) * *interval_ms;
         let state = self.tokens.entry(mint.to_owned()).or_default();
-        if timeframe == "1M" {
+        if timeframe == "1M"
+            && state
+                .last_price_timestamp_ms
+                .map_or(true, |last| point.timestamp_ms >= last)
+        {
             state.last_price = Some(point.close);
+            state.last_price_timestamp_ms = Some(point.timestamp_ms);
         }
         state
             .candles
@@ -68,7 +74,16 @@ impl MarketEngine {
             .filter(|value| value.is_finite() && *value >= 0.0)
             .unwrap_or(0.0);
         let state = self.tokens.entry(mint.to_owned()).or_default();
-        state.last_price = Some(price);
+        // A delayed provider notification may contain a valid older trade.
+        // It still corrects its historical candle, but must never rewind the
+        // token's latest-price reference or market-cap calculation.
+        if state
+            .last_price_timestamp_ms
+            .map_or(true, |last| trade.timestamp_ms >= last)
+        {
+            state.last_price = Some(price);
+            state.last_price_timestamp_ms = Some(trade.timestamp_ms);
+        }
         let mut changed = Vec::with_capacity(TIMEFRAMES.len());
 
         for (timeframe, interval_ms) in TIMEFRAMES {
@@ -169,6 +184,21 @@ mod tests {
         assert_eq!(one_second.1.close, 3.0);
         assert_eq!(one_second.1.volume, 12.0);
         assert_eq!(engine.latest_price("mint-a"), Some(3.0));
+    }
+
+    #[test]
+    fn stale_out_of_order_trade_updates_history_without_rewinding_latest_price() {
+        let mut engine = MarketEngine::default();
+        engine.set_total_supply("mint-a", 1_000_000.0);
+        engine.apply_trade("mint-a", &trade("newer", 2_500, 3.0, 2.0));
+        let stale = engine.apply_trade("mint-a", &trade("older", 1_500, 2.0, 1.0));
+
+        assert_eq!(engine.latest_price("mint-a"), Some(3.0));
+        assert_eq!(engine.market_cap_usd("mint-a"), Some(3_000_000.0));
+        let candle = stale.iter().find(|(tf, _)| tf == "1S").unwrap();
+        assert_eq!(candle.1.open, 2.0);
+        assert_eq!(candle.1.close, 3.0);
+        assert_eq!(candle.1.volume, 3.0);
     }
 
     #[test]
