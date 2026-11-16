@@ -109,8 +109,8 @@ impl AppState {
             }
 
             active.remove(&evicted_mint);
-            self.market_engine.lock().await.remove_token(&evicted_mint);
             self.seeded_market_mints.lock().await.remove(&evicted_mint);
+            self.market_engine.lock().await.remove_token(&evicted_mint);
             info!(mint = %evicted_mint, replacement = %mint, "Evicted oldest inactive market-data token to free a slot");
         }
 
@@ -171,8 +171,8 @@ impl AppState {
             match self.market_store.delete_mint(&mint).await {
                 Ok(()) => {
                     active.remove(&mint);
-                    self.market_engine.lock().await.remove_token(&mint);
                     self.seeded_market_mints.lock().await.remove(&mint);
+                    self.market_engine.lock().await.remove_token(&mint);
                 }
                 Err(error) => {
                     warn!(mint, error = %error, "Could not remove expired market-data cache");
@@ -318,6 +318,10 @@ impl AppState {
                 "confirmed_buy_count_24h": buy_count,
                 "confirmed_sell_count_24h": sell_count,
                 "confirmed_transactions_24h": buy_count + sell_count,
+                "volume_24h_usd": match (buy_volume, sell_volume) {
+                    (Some(buy), Some(sell)) => Some(buy + sell),
+                    _ => None,
+                },
             });
             if let Some(price) = trade
                 .price_usd
