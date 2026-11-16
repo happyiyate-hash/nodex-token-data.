@@ -46,20 +46,32 @@ pub async fn get_missed_trades(
     State(state): State<AppState>,
 ) -> Result<Json<MissedTradesResponse>, (StatusCode, String)> {
     if !is_valid_mint(&mint) {
-        return Err((StatusCode::BAD_REQUEST, "Invalid Solana mint address".to_owned()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid Solana mint address".to_owned(),
+        ));
     }
 
     let requested_after = query.after.unwrap_or(0).max(0);
     let limit = query.limit.unwrap_or(500).clamp(1, 500);
-    let head_cursor = state.market_store.trade_cursor_head(&mint).await
+    let head_cursor = state
+        .market_store
+        .trade_cursor_head(&mint)
+        .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     // A per-mint cache can expire and be recreated. A cursor beyond its new
     // head means the client must restart from the retained trade history.
     let cursor_reset = requested_after > head_cursor;
     let effective_after = if cursor_reset { 0 } else { requested_after };
-    let rows = state.market_store.load_trades_after_cursor(&mint, effective_after, limit).await
+    let rows = state
+        .market_store
+        .load_trades_after_cursor(&mint, effective_after, limit)
+        .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    let next_cursor = rows.last().map(|(cursor, _)| *cursor).unwrap_or(effective_after);
+    let next_cursor = rows
+        .last()
+        .map(|(cursor, _)| *cursor)
+        .unwrap_or(effective_after);
     let has_more = next_cursor < head_cursor;
 
     Ok(Json(MissedTradesResponse {
@@ -69,7 +81,10 @@ pub async fn get_missed_trades(
         next_cursor,
         has_more,
         cursor_reset,
-        trades: rows.into_iter().map(|(cursor, trade)| MissedTrade { cursor, trade }).collect(),
+        trades: rows
+            .into_iter()
+            .map(|(cursor, trade)| MissedTrade { cursor, trade })
+            .collect(),
     }))
 }
 
