@@ -1,4 +1,4 @@
-name: Rust CI
+name: Rust CI and AWS deployment
 
 on:
   push:
@@ -11,12 +11,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-ci-${{ github.ref }}
+  group: token-data-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  BINARY_NAME: nodex-token-data
+  REMOTE_APP_DIR: /opt/nodex-token-data/app
+  REMOTE_SERVICE: nodex-token-data.service
+  HEALTH_URL: http://127.0.0.1:8081/health
+
 jobs:
-  check:
-    name: Format, lint, test and build
+  quality:
+    name: Format, lint and test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,5 +45,135 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+  package:
+    name: Build Linux release binary
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --locked
+
+      - name: Verify binary
+        run: |
+          test -x "target/release/${BINARY_NAME}"
+          file "target/release/${BINARY_NAME}"
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodex-token-data-linux-x86_64
+          path: target/release/nodex-token-data
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy to market-data EC2
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Download release binary
+        uses: actions/download-artifact@v4
+        with:
+          name: nodex-token-data-linux-x86_64
+          path: release
+
+      - name: Validate deployment secrets
+        env:
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+          AWS_USER: ${{ secrets.AWS_USER }}
+          AWS_SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$AWS_HOST" || { echo "::error::Missing production environment secret AWS_HOST"; exit 1; }
+          test -n "$AWS_USER" || { echo "::error::Missing production environment secret AWS_USER"; exit 1; }
+          test -n "$AWS_SSH_PRIVATE_KEY" || { echo "::error::Missing production environment secret AWS_SSH_PRIVATE_KEY"; exit 1; }
+
+      - name: Configure SSH
+        env:
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+          AWS_SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$AWS_SSH_PRIVATE_KEY" > ~/.ssh/nodex_market_data_deploy
+          chmod 600 ~/.ssh/nodex_market_data_deploy
+          ssh-keygen -y -f ~/.ssh/nodex_market_data_deploy > /dev/null
+          ssh-keyscan -H "$AWS_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload binary to EC2
+        env:
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+          AWS_USER: ${{ secrets.AWS_USER }}
+        run: |
+          chmod +x release/nodex-token-data
+          scp -i ~/.ssh/nodex_market_data_deploy -o BatchMode=yes \
+            release/nodex-token-data \
+            "$AWS_USER@$AWS_HOST:/tmp/nodex-token-data-${GITHUB_SHA}"
+
+      - name: Install, restart and verify service (rollback on failure)
+        env:
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+          AWS_USER: ${{ secrets.AWS_USER }}
+        run: |
+          ssh -i ~/.ssh/nodex_market_data_deploy -o BatchMode=yes "$AWS_USER@$AWS_HOST" \
+            "GITHUB_SHA='$GITHUB_SHA' HEALTH_URL='$HEALTH_URL' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          APP_DIR="/opt/nodex-token-data/app"
+          BINARY="$APP_DIR/target/release/nodex-token-data"
+          UPLOAD="/tmp/nodex-token-data-$GITHUB_SHA"
+          BACKUP="$APP_DIR/target/release/nodex-token-data.previous"
+
+          test -s "$UPLOAD"
+          test -d "$APP_DIR/target/release"
+          sudo test -f /etc/nodex-token-data.env
+
+          HAD_PREVIOUS=0
+          if sudo test -f "$BINARY"; then
+            sudo cp -a "$BINARY" "$BACKUP"
+            HAD_PREVIOUS=1
+          fi
+
+          sudo install -o ubuntu -g ubuntu -m 0755 "$UPLOAD" "$BINARY"
+          rm -f "$UPLOAD"
+
+          rollback() {
+            echo "Deployment failed; restoring previous binary."
+            if [ "$HAD_PREVIOUS" -eq 1 ]; then
+              sudo install -o ubuntu -g ubuntu -m 0755 "$BACKUP" "$BINARY"
+              sudo systemctl restart nodex-token-data.service || true
+            else
+              sudo systemctl stop nodex-token-data.service || true
+              sudo rm -f "$BINARY"
+            fi
+          }
+
+          if ! sudo systemctl restart nodex-token-data.service; then
+            rollback
+            exit 1
+          fi
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --show-error --fail "$HEALTH_URL" >/dev/null; then
+              echo "Market-data health check passed."
+              sudo systemctl is-active --quiet nodex-token-data.service
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Health check failed after 60 seconds."
+          sudo systemctl status nodex-token-data.service --no-pager || true
+          rollback
+          exit 1
+          REMOTE
